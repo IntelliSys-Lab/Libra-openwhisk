@@ -17,84 +17,109 @@
 #
 -->
 
-# Libra-HPDC23
+# OpenWhisk
 
-This repo contains a demo implementation of our HPDC 2023 paper, [Libra: Harvesting Idle Resources Safely and Timely in Serverless Clusters](https://intellisys.haow.ca/assets/pdf/Libra_Hanfei_HPDC23.pdf). 
-> Serverless computing has been favored by users and infrastructure providers from various industries, including online services and scientific computing. Users enjoy its auto-scaling and ease-of-management, and providers own more control to optimize their service. However, existing serverless platforms still require users to pre-define resource allocations for their functions, leading to frequent misconfiguration by inexperienced users in practice. Besides, functions' varying input data further escalate the gap between their dynamic resource demands and static allocations, leaving functions either over-provisioned or under-provisioned. This paper presents Libra, a safe and timely resource harvesting framework for multi-node serverless clusters. Libra makes precise harvesting decisions to accelerate function invocations with harvested resources and jointly improve resource utilization by profiling dynamic resource demands and availability proactively. Experiments on OpenWhisk clusters with real-world workloads show that Libra reduces response latency by 39% and achieves 3X resource utilization compared to state-of-the-art solutions.
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0)
+[![Join Slack](https://img.shields.io/badge/join-slack-9B69A0.svg)](https://openwhisk-team.slack.com/)
+[![Twitter](https://img.shields.io/twitter/follow/openwhisk.svg?style=social&logo=twitter)](https://twitter.com/intent/follow?screen_name=openwhisk)
 
-Libra is built atop [Apache OpenWhisk](https://github.com/apache/openwhisk). We describe how to build and deploy Libra from scratch for this demo. We also provide a public AWS EC2 AMI for fast reproducing the demo experiment.
+[![Unit Tests](https://github.com/apache/openwhisk/actions/workflows/1-unit.yaml/badge.svg)](https://github.com/apache/openwhisk/actions/workflows/1-unit.yaml)
+[![System Tests](https://github.com/apache/openwhisk/actions/workflows/2-system.yaml/badge.svg)](https://github.com/apache/openwhisk/actions/workflows/2-system.yaml)
+[![MultiRuntime Tests](https://github.com/apache/openwhisk/actions/workflows/3-multi-runtime.yaml/badge.svg)](https://github.com/apache/openwhisk/actions/workflows/3-multi-runtime.yaml)
+[![Standalone Tests](https://github.com/apache/openwhisk/actions/workflows/4-standalone.yaml/badge.svg)](https://github.com/apache/openwhisk/actions/workflows/4-standalone.yaml)
+[![Scheduler Tests](https://github.com/apache/openwhisk/actions/workflows/5-scheduler.yaml/badge.svg)](https://github.com/apache/openwhisk/actions/workflows/5-scheduler.yaml)
+[![Performance Tests](https://github.com/apache/openwhisk/actions/workflows/6-performance.yaml/badge.svg)](https://github.com/apache/openwhisk/actions/workflows/6-performance.yaml)
+[![codecov](https://codecov.io/gh/apache/openwhisk/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/openwhisk)
 
-## Build From Scratch
+OpenWhisk is a serverless functions platform for building cloud applications.
+OpenWhisk offers a rich programming model for creating serverless APIs from functions,
+composing functions into serverless workflows, and connecting events to functions using rules and triggers.
+Learn more at [http://openwhisk.apache.org](http://openwhisk.apache.org).
 
-### Hardware Prerequisite
-- Operating systems and versions: Ubuntu 18.04 (last version of Ubuntu that supports Python2 as Python2 may be needed)
-- Resource requirement
-  - CPU: >= 8 cores
-  - Memory: >= 15 GB
-  - Disk: >= 30 GB
-  - Network: no requirement since it's a single-node deployment
+* [Quick Start](#quick-start) (Deploy and Use OpenWhisk on your machine)
+* [Deploy to Kubernetes](#deploy-to-kubernetes) (For development and production)
+* For project contributors and Docker deployments:
+  * [Deploy to Docker for Mac](./tools/macos/README.md)
+  * [Deploy to Docker for Ubuntu](./tools/ubuntu-setup/README.md)
+* [Learn Concepts and Commands](#learn-concepts-and-commands)
+* [OpenWhisk Community and Support](#openwhisk-community-and-support)
+* [Project Repository Structure](#project-repository-structure)
 
-Equivalent AWS EC2 instance type: c4.2xlarge with 30 GB EBS storage under root volume
+### Quick Start
 
-### Deployment and Run Demo
-This demo hosts all Libra's components on a single node.   
+The easiest way to start using OpenWhisk is to install the "Standalone" OpenWhisk stack.
+This is a full-featured OpenWhisk stack running as a Java process for convenience.
+Serverless functions run within Docker containers. You will need [Docker](https://docs.docker.com/install),
+[Java](https://java.com/en/download/help/download_options.xml) and [Node.js](https://nodejs.org) available on your machine.
 
-**Instruction**
-
-1. Download the github repo.
+To get started:
 ```
-git clone https://github.com/IntelliSys-Lab/Libra-HPDC23
-```
-2. Specify available CPU cores and memory for executing function invocations. This can be defined in [Libra-HPDC23/ansible/group_vars/all](https://github.com/IntelliSys-Lab/Libra-HPDC23/blob/master/ansible/group_vars/all) by modifying [`__userCpu`](https://github.com/IntelliSys-Lab/Libra-HPDC23/blob/master/ansible/group_vars/all#L200) and [`__userMemory`](https://github.com/IntelliSys-Lab/Libra-HPDC23/blob/master/ansible/group_vars/all#L199). Default available CPU and memory are set to 8 cores and 8 GB.
-3. Go to [`Libra-HPDC23/demo`](https://github.com/IntelliSys-Lab/Libra-HPDC23/tree/master/demo).
-```
-cd Libra-HPDC23/demo
-```
-4. Set up the environment. This could take quite a while due to building Docker images from scratch. The recommended shell to run `setup.sh` is Bash.
-```
-./setup.sh
-```
-5. Run Libra's demo. The demo experiment may take several minutes to complete.
-```
-python3 run_demo.py
+git clone https://github.com/apache/openwhisk.git
+cd openwhisk
+./gradlew core:standalone:bootRun
 ```
 
-### Workloads
+- When the OpenWhisk stack is up, it will open your browser to a functions [Playground](./docs/images/playground-ui.png),
+typically served from http://localhost:3232. The Playground allows you create and run functions directly from your browser.
 
-We provide the codebase of [ten serverless applications](https://github.com/IntelliSys-Lab/Libra-HPDC23/tree/master/workloads) used in our evaluation. However, due to hardware limitations, we only provide a simple [demo invocation trace](https://github.com/IntelliSys-Lab/Libra-HPDC23/tree/master/demo/azurefunctions-dataset2019) for the demo experiment.
-
-### Experimental Results and OpenWhisk Logs
-- Experimental results are collected as CSV files under `Libra-HPDC23/demo/logs`, including CPU usage, memory usage, resource allocation details, and invocation trajectories. Note that `Libra-HPDC23/demo/logs` is not present in the initial repo. It will only be generated after running an experiment.
-- OpenWhisk system logs can be found under `/var/tmp/wsklogs`.
-- Each run of experiments will output some metrics on the screen, including:
-  - `Actual timesteps`: logic timestep maintained by Libra
-  - `System timesteps`: logic timestep provided by Azure invocation trace
-  - `System runtime`: actual wall clock time since the experiment starts
-  - `Total events`: the total number of invocation events during the experiment
-  - `Total rewards`: the sum of execution time for all invocations
-  - `Timeout num`: the number of invocations that timed out
-  - `Error num`: the number of invocations returned with errors (typically due to resource contention, this could occur with default available 8 CPU cores)
-
-### Distributed Libra
-The steps of deploying a distributed Libra are basically the same as deploying a distributed OpenWhisk cluster. For deploying a distributed Libra, please refer to the README of [Apache OpenWhisk](https://github.com/apache/openwhisk) and [Ansible](https://github.com/apache/openwhisk/tree/master/ansible). 
-
-## Reproduce via AWS EC2 AMI
-
-### Prerequisite
-- [AWS EC2](https://aws.amazon.com/ec2/): Instance type should be at least the size of **c4.2xlarge** with at least **30 GB EBS storage under root volume**
-- [AWS EC2 AMI](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html): **ami-0b5c53c5c909b8b6a**
-
-### Run Demo
-Since this AMI has preinstalled all dependencies and built all Docker images, you can directly launch the demo once your EC2 instance is up.
-
-**Instruction**
-
-1. Launch a c4.2xlarge instance with 30 GB EBS storage under root volume using AMI **ami-0b5c53c5c909b8b6a**. Our AMI can be found by searching the AMI ID: **EC2 Management Console** -> **Images/AMIs** -> **Public Images** -> **Search**.
-2. Log into your EC2 instance and go to [`Libra-HPDC23/demo`](https://github.com/IntelliSys-Lab/Libra-HPDC23/tree/master/demo).
+- To make use of all OpenWhisk features, you will need the OpenWhisk command line tool called
+`wsk` which you can download from https://s.apache.org/openwhisk-cli-download.
+Please refer to the [CLI configuration](./docs/cli.md) for additional details. Typically you
+configure the CLI for Standalone OpenWhisk as follows:
 ```
-cd Libra-HPDC23/demo
+wsk property set \
+  --apihost 'http://localhost:3233' \
+  --auth '23bc46b1-71f6-4ed5-8c54-816aa4f8c502:123zO3xZCLrMN6v2BKK1dXYFpXlPkccOFqm12CdAsMgRU4VrNZ9lyGVCGuMDGIwP'
 ```
-3. Run Libra's demo. The demo experiment may take one or two minutes to complete.
+
+- Standalone OpenWhisk can be configured to deploy additional capabilities when that is desirable.
+Additional resources are available [here](./core/standalone/README.md).
+
+### Deploy to Kubernetes
+
+OpenWhisk can also be installed on a Kubernetes cluster. You can use
+a managed Kubernetes cluster provisioned from a public cloud provider
+(e.g., AKS, EKS, IKS, GKE), or a cluster you manage yourself.
+Additionally for local development, OpenWhisk is compatible with Minikube,
+and Kubernetes for Mac using the support built into Docker 18.06 (or higher).
+
+To get started:
+
 ```
-python3 run_demo.py
+git clone https://github.com/apache/openwhisk-deploy-kube.git
 ```
+
+Then follow the instructions in the [OpenWhisk on Kubernetes README.md](https://github.com/apache/openwhisk-deploy-kube/blob/master/README.md).
+
+### Learn Concepts and Commands
+
+Browse the [documentation](docs/) to learn more. Here are some topics you may be
+interested in:
+
+- [System overview](docs/about.md)
+- [Getting Started](docs/README.md)
+- [Create and invoke actions](docs/actions.md)
+- [Create triggers and rules](docs/triggers_rules.md)
+- [Use and create packages](docs/packages.md)
+- [Browse and use the catalog](docs/catalog.md)
+- [OpenWhisk system details](docs/reference.md)
+- [Implementing feeds](docs/feeds.md)
+- [Developing a runtime for a new language](docs/actions-actionloop.md)
+
+### OpenWhisk Community and Support
+
+Report bugs, ask questions and request features [here on GitHub](../../issues).
+
+You can also join the OpenWhisk Team on Slack [https://openwhisk-team.slack.com](https://openwhisk-team.slack.com) and chat with developers. To get access to our public Slack team, request an invite [https://openwhisk.apache.org/slack.html](https://openwhisk.apache.org/slack.html).
+
+### Project Repository Structure
+
+The OpenWhisk system is built from a [number of components](docs/dev/modules.md).  The picture below groups the components by their GitHub repos. Please open issues for a component against the appropriate repo (if in doubt just open against the main openwhisk repo).
+
+![component/repo mapping](docs/images/components_to_repos.png)
+
+### What happens on an invocation?
+
+This diagram depicts the steps which take place within Openwhisk when an action is invoked by the user:
+
+![component/repo mapping](docs/images/Openwhisk-flow-diagram.png)

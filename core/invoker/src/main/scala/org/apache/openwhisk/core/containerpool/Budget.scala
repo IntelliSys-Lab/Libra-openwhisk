@@ -22,158 +22,109 @@ import scala.collection.immutable.Map
 import scala.collection.immutable.Vector
 import java.time.Instant
 
-//
-// A budget for every activation
-//
 
-class Budget(self: Run) {
-  var memoryIn = Map.empty[Run, Int]
-  var memoryOut = Map.empty[Run, Int]
-  var cpuIn = Map.empty[Run, Int]
-  var cpuOut = Map.empty[Run, Int]
-  var cpuDelta: Int = 0
-  var memoryDelta: Int = 0
-  var memoryIdleTime: Long = 0.toLong
-  var cpuIdleTime: Long = 0.toLong
-  var memoryTrajectory: String = ""
-  var cpuTrajectory: String = ""
+// A Budget for every activation
 
-  var isSafeguard: Int = 0
+class Budget(self: Run){
+    var memoryIn = Map.empty[Run, Int]
+    var memoryOut = Map.empty[Run, Int]
+    var memoryDelta: Int = 0
+    var memoryIdleTime: Long = 0.toLong
+    var memoryTrajectory: String = ""
+    var cpuIn = Map.empty[Run, Int]
+    var cpuOut = Map.empty[Run, Int]
+    var cpuDelta: Int = 0
+    var cpuIdleTime: Long = 0.toLong
+    var cpuTrajectory: String = ""
 
-  def setMemoryDelta(memory: Int): Unit = {
-    memoryDelta = memory*MemoryLimit.MEM_UNIT
-  }
+    var isSafeguard: Int = 0
 
-  def setCpuDelta(cpu: Int): Unit = {
-    cpuDelta = cpu
-  }
-
-  def addMemoryIn(list: Vector[(Run, Int, Long, Long)]): Unit = {
-    for ((job, value, start, end) <- list) {
-      memoryIn = memoryIn + memoryIn.get(job).map{m => 
-        job -> (m + value)
-      }.getOrElse(
-        job -> value
-      )
-
-      if (memoryTrajectory == "") {
-        memoryTrajectory = s"${job.msg.activationId.toString}:${value*MemoryLimit.MEM_UNIT}"
-      } else {
-        memoryTrajectory = memoryTrajectory + s" ${job.msg.activationId.toString}:${value*MemoryLimit.MEM_UNIT}"
-      }
+    def setMemoryDelta(memory: Int): Unit ={
+        memoryDelta = memory * MemoryLimit.MEM_UNIT
     }
-  }
 
-  def removeMemoryIn(list: Vector[Run]): Unit = {
-    for (job <- list) {
-      memoryIn = memoryIn - job
+    def setCpuDelta(cpu: Int): Unit = {
+        cpuDelta = cpu
     }
-  }
 
-  def resetMemoryIn(): Unit = {
-    memoryIn = Map.empty[Run, Int]
-  }
-
-  def addMemoryOut(list: Vector[(Run, Int, Long, Long)]): Unit = {
-    for ((job, value, start, end) <- list) {
-      memoryOut = memoryOut + memoryOut.get(job).map{m => 
-        job -> (m + value)
-      }.getOrElse(
-        job -> value
-      )
-      
-      memoryIdleTime = memoryIdleTime + (Instant.now.toEpochMilli - start) * (value*MemoryLimit.MEM_UNIT)
-
-      if (memoryTrajectory == "") {
-        memoryTrajectory = s"${job.msg.activationId.toString}:-${value*MemoryLimit.MEM_UNIT}"
-      } else {
-        memoryTrajectory = memoryTrajectory + s" ${job.msg.activationId.toString}:-${value*MemoryLimit.MEM_UNIT}"
-      }
+    def addMemoryIn(list: Vector[(Run, Int, Long, Long)]): Unit = {
+        list.foreach{
+            case (job, value, _, _) =>
+                memoryIn.updated(job, memoryIn.getOrElse(job, 0) + value)
+                memoryTrajectory += (if (memoryTrajectory.isEmpty) "" else memoryTrajectory) + s"${job.msg.activationId.toString}:${value * MemoryLimit.MEM_UNIT}"
+        }
     }
-  }
 
-  def removeMemoryOut(list: Vector[Run]): Unit = {
-    for (job <- list) {
-      memoryOut = memoryOut - job
+    def removeMemoryIn(list: Vector[Run]): Unit = {
+        memoryIn --= list
     }
-  }
 
-  def resetMemoryOut(left: Option[(Int, Long, Long)]): Unit = {
-    memoryOut = Map.empty[Run, Int]
-
-    // Update rest of idle time in harvested resource pool
-    left match {
-      case Some((value, start, end)) => memoryIdleTime = memoryIdleTime + (Instant.now.toEpochMilli - start) * (value*MemoryLimit.MEM_UNIT)
-      case None =>
+    def resetMemoryIn(): Unit = {
+        memoryIn = Map.empty[Run, Int]
     }
-  }
 
-  def addCpuIn(list: Vector[(Run, Int, Long, Long)]): Unit = {
-    for ((job, value, start, end) <- list) {
-      cpuIn = cpuIn + cpuIn.get(job).map{m => 
-        job -> (m + value)
-      }.getOrElse(
-        job -> value
-      )
-
-      if (cpuTrajectory == "") {
-        cpuTrajectory = s"${job.msg.activationId.toString}:${value}"
-      } else {
-        cpuTrajectory = cpuTrajectory + s" ${job.msg.activationId.toString}:${value}"
-      }
+    def addMemoryOut(list: Vector[(Run, Int, Long, Long)]): Unit = {
+        list.foreach{
+            case (job, value, _, _) =>
+                memoryOut.updated(job, memoryOut.getOrElse(job, 0) + value)
+                memoryTrajectory += (if (memoryTrajectory.isEmpty) "" else memoryTrajectory) + s"${job.msg.activationId}:${value * MemoryLimit.MEM_UNIT}"
+        }
     }
-  }
 
-  def removeCpuIn(list: Vector[Run]): Unit = {
-    for (job <- list) {
-      cpuIn = cpuIn - job
+    def removeMemoryOut(list: Vector[Run]): Unit = {
+        memoryOut --= list
     }
-  }
 
-  def resetCpuIn(): Unit = {
-    cpuIn = Map.empty[Run, Int]
-  }
+    def resetMemoryOut(left: Option[(Int, Long, Long)]): Unit = {
+        memoryOut = Map.empty[Run, Int]
 
-  def addCpuOut(list: Vector[(Run, Int, Long, Long)]): Unit = {
-    for ((job, value, start, end) <- list) {
-      cpuOut = cpuOut + cpuOut.get(job).map{m => 
-        job -> (m + value)
-      }.getOrElse(
-        job -> value
-      )
-
-      cpuIdleTime = cpuIdleTime + (Instant.now.toEpochMilli - start) * value
-
-      if (cpuTrajectory == "") {
-        cpuTrajectory = s"${job.msg.activationId.toString}:-${value}"
-      } else {
-        cpuTrajectory = cpuTrajectory + s" ${job.msg.activationId.toString}:-${value}"
-      }
+        // Update rest of idle time in harvested resource pool
+        left match {
+            case Some((value, start, end)) => memoryIdleTime = memoryIdleTime + (Instant.now.toEpochMilli - start) * (value * MemoryLimit.MEM_UNIT)
+            case None =>
+        }
     }
-  }
 
-  def removeCpuOut(list: Vector[Run]): Unit = {
-    for (job <- list) {
-      cpuOut = cpuOut - job
+    def addCpuIn(list: Vector[(Run, Int, Long, Long)]): Unit = {
+        list.foreach {
+            case (job, value, _, _) =>
+                cpuIn = cpuIn.updated(job, cpuIn.getOrElse(job, 0) + value)
+                cpuTrajectory += (if (cpuTrajectory.isEmpty) "" else cpuTrajectory) + s"${job.msg.activationId}:$value"
+        }
     }
-  }
 
-  def resetCpuOut(left: Option[(Int, Long, Long)]): Unit = {
-    cpuOut = Map.empty[Run, Int]
-
-    // Update rest of idle time in harvested resource pool
-    left match {
-      case Some((value, start, end)) => cpuIdleTime = cpuIdleTime + (Instant.now.toEpochMilli - start) * value
-      case None =>
+    def removeCpuIn(list: Vector[Run]): Unit = {
+        cpuIn --= list
     }
-  }
 
-  def totalIdleTime(): (String, String) = {((memoryIdleTime).toString, (cpuIdleTime).toString)}
+    def resetCpuIn(): Unit = {
+        cpuIn = Map.empty[Run, Int]
+    }
 
-  def summary(): (String, String) = {
-    val id = self.msg.activationId.toString
-    val (memoryIdle, cpuIdle) = totalIdleTime()
-    val trajectory: String = s"${isSafeguard};${memoryDelta} ${cpuDelta};${memoryIdle} ${cpuIdle};${memoryTrajectory};${cpuTrajectory}"
-    (id, trajectory)
-  }
+    def addCpuOut(list: Vector[(Run, Int, Long, Long)]): Unit = {
+        list.foreach{
+            case (job, value, start, _) =>
+                cpuOut.updated(job, cpuOut.getOrElse(job, 0) + value)
+                cpuIdleTime = cpuIdleTime + (Instant.now.toEpochMilli - start) * value
+                cpuTrajectory += (if (cpuTrajectory.isEmpty) "" else cpuTrajectory) + s"${job.msg.activationId.toString}:-${value}"
+        }
+    }
+
+    def removeCputOut(list: Vector[Run]): Unit = {
+    }
+
+    def resetCpuOut(left: Option[(Int, Long, Long)]): Unit = {
+    }
+
+    def totalIdleTime: (String, String) = {((memoryIdleTime).toString, (cpuIdleTime).toString)}
+
+    def summary(): (String, String) = {
+        val id = self.msg.activationId.toString
+        val (memoryIdle, cpuIdle) = totalIdleTime
+        val trajectory: String = s"${isSafeguard};${memoryDelta} ${cpuDelta};${memoryIdle} ${cpuIdle};${memoryTrajectory};${cpuTrajectory}"
+        (id, trajectory)
+    }
 }
+
+
+//// TODO What does the left match {} do in resetMemoryOut ...

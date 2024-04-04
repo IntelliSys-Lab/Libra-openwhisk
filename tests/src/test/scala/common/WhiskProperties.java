@@ -270,6 +270,10 @@ public class WhiskProperties {
         return getBaseControllerHost() + ":" + getControllerBasePort();
     }
 
+    public static String getBaseInvokerAddress(){
+        return getInvokerHosts()[0] + ":" + whiskProperties.getProperty("invoker.hosts.basePort");
+    }
+
     public static int getMaxActionInvokesPerMinute() {
         String valStr = whiskProperties.getProperty("limits.actions.invokes.perMinute");
         return Integer.parseInt(valStr);
@@ -408,7 +412,7 @@ public class WhiskProperties {
         return getPropFromSystemOrEnv(WHISK_SERVER) == null;
     }
 
-    private static String getProperty(String key, String defaultValue) {
+    public static String getProperty(String key, String defaultValue) {
         String value = getPropFromSystemOrEnv(key);
         if (value == null) {
             value = whiskProperties.getProperty(key, defaultValue);

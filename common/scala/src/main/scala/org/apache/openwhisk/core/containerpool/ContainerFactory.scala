@@ -24,7 +24,8 @@ import org.apache.openwhisk.core.entity.{ByteSize, ExecManifest, ExecutableWhisk
 import org.apache.openwhisk.spi.Spi
 
 import scala.concurrent.Future
-import scala.math.max
+import scala.concurrent.duration.FiniteDuration
+import scala.math.{max, round}
 
 case class ContainerArgsConfig(network: String,
                                dnsServers: Seq[String] = Seq.empty,
@@ -43,10 +44,26 @@ case class ContainerArgsConfig(network: String,
     }.toMap
 }
 
-case class ContainerPoolConfig(userMemory: ByteSize, concurrentPeekFactor: Double, akkaClient: Boolean) {
+case class ContainerPoolConfig(userMemory: ByteSize,
+                               concurrentPeekFactor: Double,
+                               akkaClient: Boolean,
+                               prewarmExpirationCheckInitDelay: FiniteDuration,
+                               prewarmExpirationCheckInterval: FiniteDuration,
+                               prewarmExpirationCheckIntervalVariance: Option[FiniteDuration],
+                               prewarmExpirationLimit: Int,
+                               prewarmMaxRetryLimit: Int,
+                               prewarmPromotion: Boolean,
+                               memorySyncInterval: FiniteDuration,
+                               batchDeletionSize: Int,
+                               userCpus: Option[Double] = None,
+                               prewarmContainerCreationConfig: Option[PrewarmContainerCreationConfig] = None) {
   require(
     concurrentPeekFactor > 0 && concurrentPeekFactor <= 1.0,
     s"concurrentPeekFactor must be > 0 and <= 1.0; was $concurrentPeekFactor")
+
+  require(prewarmExpirationCheckInterval.toSeconds > 0, "prewarmExpirationCheckInterval must be > 0")
+  require(batchDeletionSize > 0, "batch deletion size must be > 0")
+  require(userCpus.forall(_ > 0), "userCpus must be > 0")
 
   /**
    * The shareFactor indicates the number of containers that would share a single core, on average.
@@ -58,6 +75,21 @@ case class ContainerPoolConfig(userMemory: ByteSize, concurrentPeekFactor: Doubl
   // Grant more CPU to a container if it allocates more memory.
   def cpuShare(reservedMemory: ByteSize) =
     max((totalShare / (userMemory.toBytes / reservedMemory.toBytes)).toInt, 2) // The minimum allowed cpu-shares is 2
+
+  private val minContainerCpus = 0.01 // The minimum cpus allowed by docker is 0.01
+  private val roundingMultiplier = 100000
+  def cpuLimit(reservedMemory: ByteSize): Option[Double] = {
+    userCpus.map(c => {
+      val containerCpus = c / (userMemory.toBytes / reservedMemory.toBytes)
+      val roundedContainerCpus = round(containerCpus * roundingMultiplier).toDouble / roundingMultiplier // Only use decimal precision of 5
+      max(roundedContainerCpus, minContainerCpus)
+    })
+  }
+}
+
+case class PrewarmContainerCreationConfig(maxConcurrent: Int, creationDelay: FiniteDuration) {
+  require(maxConcurrent > 0, "maxConcurrent for per invoker must be > 0")
+  require(creationDelay.toSeconds > 0, "creationDelay must be > 0")
 }
 
 case class RuntimesRegistryCredentials(user: String, password: String)
@@ -96,8 +128,9 @@ trait ContainerFactory {
     userProvidedImage: Boolean,
     memory: ByteSize,
     cpuShares: Int,
+    cpuLimit: Option[Double],
     action: Option[ExecutableWhiskAction])(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
-    createContainer(tid, name, actionImage, userProvidedImage, memory, cpuShares)
+    createContainer(tid, name, actionImage, userProvidedImage, memory, cpuShares, cpuLimit)
   }
 
   def createContainer(tid: TransactionId,
@@ -105,7 +138,8 @@ trait ContainerFactory {
                       actionImage: ExecManifest.ImageName,
                       userProvidedImage: Boolean,
                       memory: ByteSize,
-                      cpuShares: Int)(implicit config: WhiskConfig, logging: Logging): Future[Container]
+                      cpuShares: Int,
+                      cpuLimit: Option[Double])(implicit config: WhiskConfig, logging: Logging): Future[Container]
 
   /** perform any initialization */
   def init(): Unit

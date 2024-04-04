@@ -313,7 +313,7 @@ class WskActionTests extends TestHelpers with WskTestHelpers with JsHelpers with
     val run = wsk.action.invoke(name, Map("payload" -> "google.com".toJson))
     withActivation(wsk.activation, run) { activation =>
       val result = activation.response.result.get
-      result.getFields("stdout", "code") match {
+      result.asJsObject.getFields("stdout", "code") match {
         case Seq(JsString(stdout), JsNumber(code)) =>
           stdout should not include "bytes from"
           code.intValue should not be 0
@@ -354,6 +354,55 @@ class WskActionTests extends TestHelpers with WskTestHelpers with JsHelpers with
     withActivation(wsk.activation, run) { activation =>
       activation.response.status shouldBe "success"
       activation.logs.get.mkString(" ") should include(s"hello, $hello")
+    }
+  }
+
+  it should "not delete existing annotations when updating action with new annotation" in withAssetCleaner(wskprops) {
+    (wp, assetHelper) =>
+      val name = "hello"
+
+      assetHelper.withCleaner(wsk.action, name) { (action, _) =>
+        val annotations = Map("key1" -> "value1".toJson, "key2" -> "value2".toJson)
+        action.create(name, Some(TestUtils.getTestActionFilename("hello.js")), annotations = annotations)
+        val annotationString = wsk.parseJsonString(wsk.action.get(name).stdout).fields("annotations").toString
+
+        annotationString should include(""""key":"key1"""")
+        annotationString should include(""""value":"value1"""")
+        annotationString should include(""""key":"key2"""")
+        annotationString should include(""""value":"value2"""")
+
+        val newAnnotations = Map("key3" -> "value3".toJson, "key4" -> "value4".toJson)
+        action.create(
+          name,
+          Some(TestUtils.getTestActionFilename("hello.js")),
+          annotations = newAnnotations,
+          update = true)
+        val newAnnotationString = wsk.parseJsonString(wsk.action.get(name).stdout).fields("annotations").toString
+
+        newAnnotationString should include(""""key":"key1"""")
+        newAnnotationString should include(""""value":"value1"""")
+        newAnnotationString should include(""""key":"key2"""")
+        newAnnotationString should include(""""value":"value2"""")
+        newAnnotationString should include(""""key":"key3"""")
+        newAnnotationString should include(""""value":"value3"""")
+        newAnnotationString should include(""""key":"key4"""")
+        newAnnotationString should include(""""value":"value4"""")
+
+        action.create(name, Some(TestUtils.getTestActionFilename("hello.js")), update = true)
+      }
+  }
+
+  it should "invoke an action with a array result" in withAssetCleaner(wskprops) { (wp, assetHelper) =>
+    val name = "helloArray"
+    assetHelper.withCleaner(wsk.action, name) { (action, _) =>
+      action.create(name, Some(TestUtils.getTestActionFilename("helloArray.js")))
+    }
+
+    val run = wsk.action.invoke(name)
+    withActivation(wsk.activation, run) { activation =>
+      activation.response.status shouldBe "success"
+      activation.response.result shouldBe Some(
+        JsArray(JsObject("key1" -> JsString("value1")), JsObject("key2" -> JsString("value2"))))
     }
   }
 

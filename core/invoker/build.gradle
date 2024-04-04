@@ -28,6 +28,12 @@ apply from: '../../gradle/docker.gradle'
 distDocker.dependsOn ':common:scala:distDocker', 'distTar'
 
 project.archivesBaseName = "openwhisk-invoker"
+
+scoverage {
+    scoverageVersion.set("${gradle.scala.scoverageVersion}")
+    scoverageScalaVersion.set("${gradle.scala.scoverageScalaVersion}")
+}
+
 ext.coverageDirs = [
     "${buildDir}/classes/scala/scoverage",
     "${project(':common:scala').buildDir.absolutePath}/classes/scala/scoverage"
@@ -35,21 +41,20 @@ ext.coverageDirs = [
 distDockerCoverage.dependsOn ':common:scala:scoverageClasses', 'scoverageClasses'
 
 dependencies {
-    compile "org.scala-lang:scala-library:${gradle.scala.version}"
-    compile project(':common:scala')
+    implementation "org.scala-lang:scala-library:${gradle.scala.version}"
+    implementation project(':common:scala')
+    implementation project(':core:scheduler')
 
-    compile ("org.apache.curator:curator-recipes:${gradle.curator.version}") {
+    implementation ("org.apache.curator:curator-recipes:${gradle.curator.version}") {
         exclude group: 'org.apache.zookeeper', module:'zookeeper'
     }
-    compile ("org.apache.zookeeper:zookeeper:3.4.11") {
+    implementation ("org.apache.zookeeper:zookeeper:3.4.14") {
         exclude group: 'org.slf4j'
         exclude group: 'log4j'
         exclude group: 'jline'
     }
-
-    // Dependecies for Redis
-    compile group: 'redis.clients', name: 'jedis', version: '3.3.0' // https://mvnrepository.com/artifact/redis.clients/jedis
-    compile group: 'org.apache.commons', name: 'commons-pool2', version: '2.8.1' // https://mvnrepository.com/artifact/org.apache.commons/commons-pool2
+    // https://mvnrepository.com/artifact/redis.clients/jedis
+    implementation group: 'redis.clients', name: 'jedis', version: '5.0.0'
 }
 
 mainClassName = "org.apache.openwhisk.core.invoker.Invoker"

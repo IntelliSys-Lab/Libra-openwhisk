@@ -19,13 +19,13 @@ package org.apache.openwhisk.core.invoker
 
 import akka.Done
 import akka.actor.{ActorSystem, CoordinatedShutdown}
-import akka.stream.ActorMaterializer
 import com.typesafe.config.ConfigValueFactory
 import kamon.Kamon
 import org.apache.openwhisk.common.Https.HttpsConfig
 import org.apache.openwhisk.common._
 import org.apache.openwhisk.core.WhiskConfig._
 import org.apache.openwhisk.core.connector.{MessageProducer, MessagingProvider}
+import org.apache.openwhisk.core.containerpool.v2.{NotSupportedPoolState, TotalContainerPoolState}
 import org.apache.openwhisk.core.containerpool.{Container, ContainerPoolConfig}
 import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
@@ -35,12 +35,16 @@ import org.apache.openwhisk.spi.{Spi, SpiLoader}
 import org.apache.openwhisk.utils.ExecutionContextFactory
 import pureconfig._
 import pureconfig.generic.auto._
+import spray.json._
 
 import scala.concurrent.duration._
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.Try
 
-case class CmdLineArgs(uniqueName: Option[String] = None, id: Option[Int] = None, displayedName: Option[String] = None)
+case class CmdLineArgs(uniqueName: Option[String] = None,
+                       id: Option[Int] = None,
+                       displayedName: Option[String] = None,
+                       overwriteId: Option[Int] = None)
 
 object Invoker {
 
@@ -69,6 +73,17 @@ object Invoker {
 
   protected val protocol = loadConfigOrThrow[String]("whisk.invoker.protocol")
 
+  val topicPrefix = loadConfigOrThrow[String](ConfigKeys.kafkaTopicsPrefix)
+
+  object InvokerEnabled extends DefaultJsonProtocol {
+    def parseJson(string: String) = Try(serdes.read(string.parseJson))
+    implicit val serdes = jsonFormat(InvokerEnabled.apply _, "enabled")
+  }
+
+  case class InvokerEnabled(isEnabled: Boolean) {
+    def serialize(): String = InvokerEnabled.serdes.write(this).compactPrint
+  }
+
   /**
    * An object which records the environment variables required for this component to run.
    */
@@ -76,8 +91,9 @@ object Invoker {
     Map(servicePort -> 8080.toString) ++
       ExecManifest.requiredProperties ++
       kafkaHosts ++
-      zookeeperHosts ++
       wskApiHost
+
+  def optionalProperties = zookeeperHosts.keys.toSet
 
   def initKamon(instance: Int): Unit = {
     // Replace the hostname of the invoker to the assigned id of the invoker.
@@ -93,8 +109,20 @@ object Invoker {
       ActorSystem(name = "invoker-actor-system", defaultExecutionContext = Some(ec))
     implicit val logger = new AkkaLogging(akka.event.Logging.getLogger(actorSystem, this))
     val poolConfig: ContainerPoolConfig = loadConfigOrThrow[ContainerPoolConfig](ConfigKeys.containerPool)
-    val limitConfig: ConcurrencyLimitConfig = loadConfigOrThrow[ConcurrencyLimitConfig](ConfigKeys.concurrencyLimit)
+    val limitConfig: IntraConcurrencyLimitConfig =
+      loadConfigOrThrow[IntraConcurrencyLimitConfig](ConfigKeys.concurrencyLimit)
+    val tags: Seq[String] = Some(loadConfigOrThrow[String](ConfigKeys.invokerResourceTags))
+      .map(_.trim())
+      .filter(_ != "")
+      .map(_.split(",").toSeq)
+      .getOrElse(Seq.empty[String])
+    val dedicatedNamespaces: Seq[String] = Some(loadConfigOrThrow[String](ConfigKeys.invokerDedicatedNamespaces))
+      .map(_.trim())
+      .filter(_ != "")
+      .map(_.split(",").toSeq)
+      .getOrElse(Seq.empty[String])
 
+    logger.info(this, s"invoker tags: (${tags.mkString(", ")})")
     // Prepare Kamon shutdown
     CoordinatedShutdown(actorSystem).addTask(CoordinatedShutdown.PhaseActorSystemTerminate, "shutdownKamon") { () =>
       logger.info(this, s"Shutting down Kamon with coordinated shutdown")
@@ -102,7 +130,7 @@ object Invoker {
     }
 
     // load values for the required properties from the environment
-    implicit val config = new WhiskConfig(requiredProperties)
+    implicit val config = new WhiskConfig(requiredProperties, optionalProperties)
 
     def abort(message: String) = {
       logger.error(this, message)(TransactionId.invoker)
@@ -133,6 +161,8 @@ object Invoker {
     //    --uniqueName <value>   a unique name to dynamically assign Kafka topics from Zookeeper
     //    --displayedName <value> a name to identify this invoker via invoker health protocol
     //    --id <value>     proposed invokerId
+    //    --overwriteId <value> proposed invokerId to re-write with uniqueName in Zookeeper,
+    //    DO NOT USE overwriteId unless sure invokerId does not exist for other uniqueName
     def parse(ls: List[String], c: CmdLineArgs): CmdLineArgs = {
       ls match {
         case "--uniqueName" :: uniqueName :: tail =>
@@ -141,6 +171,8 @@ object Invoker {
           parse(tail, c.copy(displayedName = nonEmptyString(displayedName)))
         case "--id" :: id :: tail if Try(id.toInt).isSuccess =>
           parse(tail, c.copy(id = Some(id.toInt)))
+        case "--overwriteId" :: overwriteId :: tail if Try(overwriteId.toInt).isSuccess =>
+          parse(tail, c.copy(overwriteId = Some(overwriteId.toInt)))
         case Nil => c
         case _   => abort(s"Error processing command line arguments $ls")
       }
@@ -150,16 +182,17 @@ object Invoker {
 
     val assignedInvokerId = cmdLineArgs match {
       // --id is defined with a valid value, use this id directly.
-      case CmdLineArgs(_, Some(id), _) =>
+      case CmdLineArgs(_, Some(id), _, _) =>
         logger.info(this, s"invokerReg: using proposedInvokerId $id")
         id
 
       // --uniqueName is defined with a valid value, id is empty, assign an id via zookeeper
-      case CmdLineArgs(Some(unique), None, _) =>
-        if (config.zookeeperHosts.startsWith(":") || config.zookeeperHosts.endsWith(":")) {
+      case CmdLineArgs(Some(unique), None, _, overwriteId) =>
+        if (config.zookeeperHosts.startsWith(":") || config.zookeeperHosts.endsWith(":") ||
+            config.zookeeperHosts.equals("")) {
           abort(s"Must provide valid zookeeper host and port to use dynamicId assignment (${config.zookeeperHosts})")
         }
-        new InstanceIdAssigner(config.zookeeperHosts).getId(unique)
+        new InstanceIdAssigner(config.zookeeperHosts).setAndGetId(unique, overwriteId)
 
       case _ => abort(s"Either --id or --uniqueName must be configured with correct values")
     }
@@ -167,11 +200,18 @@ object Invoker {
     initKamon(assignedInvokerId)
 
     val topicBaseName = "invoker"
-    val topicName = topicBaseName + assignedInvokerId
+    val topicName = topicPrefix + topicBaseName + assignedInvokerId
 
     val maxMessageBytes = Some(ActivationEntityLimit.MAX_ACTIVATION_LIMIT)
     val invokerInstance =
-      InvokerInstanceId(assignedInvokerId, cmdLineArgs.uniqueName, cmdLineArgs.displayedName, poolConfig.userMemory)
+      InvokerInstanceId(
+        assignedInvokerId,
+        cmdLineArgs.uniqueName,
+        cmdLineArgs.displayedName,
+        poolConfig.userMemory,
+        None,
+        tags,
+        dedicatedNamespaces)
 
     val msgProvider = SpiLoader.get[MessagingProvider]
     if (msgProvider
@@ -192,9 +232,7 @@ object Invoker {
       if (Invoker.protocol == "https") Some(loadConfigOrThrow[HttpsConfig]("whisk.invoker.https")) else None
 
     val invokerServer = SpiLoader.get[InvokerServerProvider].instance(invoker)
-    BasicHttpService.startHttpService(invokerServer.route, port, httpsConfig)(
-      actorSystem,
-      ActorMaterializer.create(actorSystem))
+    BasicHttpService.startHttpService(invokerServer.route, port, httpsConfig)(actorSystem)
   }
 }
 
@@ -202,15 +240,22 @@ object Invoker {
  * An Spi for providing invoker implementation.
  */
 trait InvokerProvider extends Spi {
-  def instance(config: WhiskConfig,
-               instance: InvokerInstanceId,
-               producer: MessageProducer,
-               poolConfig: ContainerPoolConfig,
-               limitsConfig: ConcurrencyLimitConfig)(implicit actorSystem: ActorSystem, logging: Logging): InvokerCore
+  def instance(
+    config: WhiskConfig,
+    instance: InvokerInstanceId,
+    producer: MessageProducer,
+    poolConfig: ContainerPoolConfig,
+    limitsConfig: IntraConcurrencyLimitConfig)(implicit actorSystem: ActorSystem, logging: Logging): InvokerCore
 }
 
 // this trait can be used to add common implementation
-trait InvokerCore {}
+trait InvokerCore {
+  def enable(): String
+  def disable(): String
+  def isEnabled(): String
+  def backfillPrewarm(): String
+  def getPoolState(): Future[Either[NotSupportedPoolState, TotalContainerPoolState]]
+}
 
 /**
  * An Spi for providing RestAPI implementation for invoker.
@@ -219,10 +264,4 @@ trait InvokerCore {}
 trait InvokerServerProvider extends Spi {
   def instance(
     invoker: InvokerCore)(implicit ec: ExecutionContext, actorSystem: ActorSystem, logger: Logging): BasicRasService
-}
-
-object DefaultInvokerServer extends InvokerServerProvider {
-  override def instance(
-    invoker: InvokerCore)(implicit ec: ExecutionContext, actorSystem: ActorSystem, logger: Logging): BasicRasService =
-    new BasicRasService {}
 }

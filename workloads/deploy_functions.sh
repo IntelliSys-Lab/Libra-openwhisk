@@ -1,4 +1,6 @@
-#! /bin/bash
+# ! /bin/bash
+
+set -e
 
 
 echo ""
@@ -20,15 +22,15 @@ cd python_image_processing/deploy/build
 wsk -i action update ip --kind python:3 --main main --memory 64 index.zip
 cd ../../../
 
-# video-processing (vp)
-cd python_video_processing/deploy/build
-wsk -i action update vp --kind python:3 --main main --memory 64 index.zip
-cd ../../../
+# # video-processing (vp)
+# cd python_video_processing/deploy/build
+# wsk -i action update vp --kind python:3 --main main --memory 64 index.zip
+# cd ../../../
 
-# image-recognition (ir)
-cd python_image_recognition/deploy/build
-wsk -i action update ir --docker yhf0218/actionloop-python-v3.6-ai --main main --memory 64 index.zip
-cd ../../../
+# # image-recognition (ir)
+# cd python_image_recognition/deploy/build
+# wsk -i action update ir --docker yhf0218/actionloop-python-v3.6-ai --main main --memory 64 index.zip
+# cd ../../../
 
 # k nearest neighbors (knn)
 cd python_k_nearest_neighbors/deploy/build
@@ -50,10 +52,10 @@ cd python_gradient_descent/deploy/build
 wsk -i action update gd --kind python:3 --main main --memory 64 index.zip
 cd ../../../
 
-# dna-visualisation (dv)
-cd python_dna_visualization/deploy/build
-wsk -i action update dv --kind python:3 --main main --memory 64 index.zip
-cd ../../../
+# # dna-visualisation (dv)
+# cd python_dna_visualization/deploy/build
+# wsk -i action update dv --kind python:3 --main main --memory 64 index.zip
+# cd ../../../
 
 # Initialize workload input in CouchDB
 cd ../agent

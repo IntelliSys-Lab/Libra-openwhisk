@@ -88,7 +88,7 @@ def get_redis(
 
 
 if __name__ == "__main__":
-    redis_host = run_cmd('cat ../ansible/environments/distributed/hosts | grep -A 1 "\[edge\]" | grep -v "\[edge\]" | awk {}'.format("{'print $1'}"))
+    redis_host = run_cmd('cat ../ansible/environments/local/hosts | grep -A 1 "\[edge\]" | grep -v "\[edge\]" | awk {}'.format("{'print $1'}"))
     redis_port = 6379
     redis_password = "openwhisk"
 

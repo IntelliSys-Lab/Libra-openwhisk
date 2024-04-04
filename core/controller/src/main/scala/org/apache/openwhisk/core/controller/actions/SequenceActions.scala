@@ -21,8 +21,11 @@ import java.time.{Clock, Instant}
 import java.util.concurrent.atomic.AtomicReference
 
 import akka.actor.ActorSystem
+import spray.json._
+import spray.json.DefaultJsonProtocol._
 import org.apache.openwhisk.common.{Logging, TransactionId, UserEvents}
 import org.apache.openwhisk.core.connector.{EventMessage, MessagingProvider}
+import org.apache.openwhisk.core.containerpool.Interval
 import org.apache.openwhisk.core.controller.WhiskServices
 import org.apache.openwhisk.core.database.{ActivationStore, NoDocumentException, UserContext}
 import org.apache.openwhisk.core.entity._
@@ -68,7 +71,7 @@ protected[actions] trait SequenceActions {
   protected[actions] def invokeAction(
     user: Identity,
     action: WhiskActionMetaData,
-    payload: Option[JsObject],
+    payload: Option[JsValue],
     waitForResponse: Option[FiniteDuration],
     cause: Option[ActivationId])(implicit transid: TransactionId): Future[Either[ActivationId, WhiskActivation]]
 
@@ -90,7 +93,7 @@ protected[actions] trait SequenceActions {
     user: Identity,
     action: WhiskActionMetaData,
     components: Vector[FullyQualifiedEntityName],
-    payload: Option[JsObject],
+    payload: Option[JsValue],
     waitForOutermostResponse: Option[FiniteDuration],
     cause: Option[ActivationId],
     topmost: Boolean,
@@ -178,7 +181,7 @@ protected[actions] trait SequenceActions {
             }
           }
 
-          activationStore.storeAfterCheck(seqActivation, blockingSequence, None, context)(
+          activationStore.storeAfterCheck(seqActivation, blockingSequence, None, None, context)(
             transid,
             notifier = None,
             logging)
@@ -199,7 +202,7 @@ protected[actions] trait SequenceActions {
                                      topmost: Boolean,
                                      cause: Option[ActivationId],
                                      start: Instant,
-                                     end: Instant): WhiskActivation = {
+                                     end: Instant)(implicit transid: TransactionId): WhiskActivation = {
 
     // compute max memory
     val sequenceLimits = accounting.maxMemory map { maxMemoryAcrossActionsInSequence =>
@@ -212,6 +215,11 @@ protected[actions] trait SequenceActions {
     val causedBy = if (!topmost) {
       Some(Parameters(WhiskActivation.causedByAnnotation, JsString(Exec.SEQUENCE)))
     } else None
+
+    // set waitTime for sequence action
+    val waitTime = {
+      Parameters(WhiskActivation.waitTimeAnnotation, Interval(transid.meta.start, start).duration.toMillis.toJson)
+    }
 
     // set binding if an invoked action is in a package binding
     val binding = action.binding map { path =>
@@ -234,7 +242,7 @@ protected[actions] trait SequenceActions {
       annotations = Parameters(WhiskActivation.topmostAnnotation, JsBoolean(topmost)) ++
         Parameters(WhiskActivation.pathAnnotation, JsString(action.fullyQualifiedName(false).asString)) ++
         Parameters(WhiskActivation.kindAnnotation, JsString(Exec.SEQUENCE)) ++
-        causedBy ++ binding ++
+        causedBy ++ waitTime ++ binding ++
         sequenceLimits,
       duration = Some(accounting.duration))
   }
@@ -258,7 +266,7 @@ protected[actions] trait SequenceActions {
     user: Identity,
     seqAction: WhiskActionMetaData,
     seqActivationId: ActivationId,
-    inputPayload: Option[JsObject],
+    inputPayload: Option[JsValue],
     components: Vector[FullyQualifiedEntityName],
     cause: Option[ActivationId],
     atomicActionCnt: Int)(implicit transid: TransactionId): Future[SequenceAccounting] = {
@@ -285,7 +293,7 @@ protected[actions] trait SequenceActions {
       .foldLeft(initialAccounting) { (accountingFuture, futureAction) =>
         accountingFuture.flatMap { accounting =>
           if (accounting.atomicActionCnt < actionSequenceLimit) {
-            invokeNextAction(user, futureAction, accounting, cause)
+            invokeNextAction(user, futureAction, accounting, cause, transid)
               .flatMap { accounting =>
                 if (!accounting.shortcircuit) {
                   Future.successful(accounting)
@@ -327,17 +335,24 @@ protected[actions] trait SequenceActions {
    * @param cause the activation id of the first sequence containing this activations
    * @return a future which resolves with updated accounting for a sequence, including the last result, duration, and activation ids
    */
-  private def invokeNextAction(
-    user: Identity,
-    futureAction: Future[WhiskActionMetaData],
-    accounting: SequenceAccounting,
-    cause: Option[ActivationId])(implicit transid: TransactionId): Future[SequenceAccounting] = {
+  private def invokeNextAction(user: Identity,
+                               futureAction: Future[WhiskActionMetaData],
+                               accounting: SequenceAccounting,
+                               cause: Option[ActivationId],
+                               parentTid: TransactionId): Future[SequenceAccounting] = {
     futureAction.flatMap { action =>
+      implicit val transid: TransactionId = TransactionId.childOf(parentTid)
+
       // the previous response becomes input for the next action in the sequence;
       // the accounting no longer needs to hold a reference to it once the action is
       // invoked, so previousResponse.getAndSet(null) drops the reference at this point
       // which prevents dragging the previous response for the lifetime of the next activation
-      val inputPayload = accounting.previousResponse.getAndSet(null).result.map(_.asJsObject)
+      val previousResult = accounting.previousResponse.getAndSet(null).result
+      val inputPayload: Option[JsValue] = previousResult match {
+        case Some(JsObject(fields))  => Some(JsObject(fields))
+        case Some(JsArray(elements)) => Some(JsArray(elements))
+        case _                       => None
+      }
 
       // invoke the action by calling the right method depending on whether it's an atomic action or a sequence
       val futureWhiskActivationTuple = action.toExecutableWhiskAction match {
@@ -450,9 +465,10 @@ protected[actions] case class SequenceAccounting(atomicActionCnt: Int,
     // check conditions on payload that may lead to interrupting the execution of the sequence
     //     short-circuit the execution of the sequence iff the payload contains an error field
     //     and is the result of an action return, not the initial payload
-    val outputPayload = activation.response.result.map(_.asJsObject)
-    val payloadContent = outputPayload getOrElse JsObject.empty
-    val errorField = payloadContent.fields.get(ActivationResponse.ERROR_FIELD)
+    val errorField: Option[JsValue] = activation.response.result match {
+      case Some(JsObject(fields)) => fields.get(ActivationResponse.ERROR_FIELD)
+      case _                      => None
+    }
     val withinSeqLimit = newCnt <= maxSequenceCnt
 
     if (withinSeqLimit && errorField.isEmpty) {

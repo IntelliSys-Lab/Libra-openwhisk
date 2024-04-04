@@ -75,13 +75,11 @@ class ElasticSearchLogStore(
         elasticSearchConfig.logSchema.time)
   }
 
-  implicit val actorSystem = system
-
   private val esClient = new ElasticSearchRestClient(
     elasticSearchConfig.protocol,
     elasticSearchConfig.host,
     elasticSearchConfig.port,
-    httpFlow)
+    httpFlow)(system, system.dispatcher)
 
   private def transcribeLogs(queryResult: EsSearchResult): ActivationLogs =
     ActivationLogs(queryResult.hits.hits.map(_.source.convertTo[UserLogEntry].toFormattedString))

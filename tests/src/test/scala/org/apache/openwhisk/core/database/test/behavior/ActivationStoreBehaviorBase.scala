@@ -19,7 +19,6 @@ package org.apache.openwhisk.core.database.test.behavior
 
 import java.time.Instant
 
-import akka.stream.ActorMaterializer
 import common.{StreamLogging, WskActorSystem}
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.database.{ActivationStore, CacheChangeNotification, UserContext}
@@ -44,7 +43,6 @@ trait ActivationStoreBehaviorBase
     with IntegrationPatience
     with BeforeAndAfterEach {
 
-  protected implicit val materializer: ActorMaterializer = ActorMaterializer()
   protected implicit val notifier: Option[CacheChangeNotification] = None
 
   def context: UserContext
@@ -88,6 +86,17 @@ trait ActivationStoreBehaviorBase
       ActivationId.generate(),
       Instant.ofEpochMilli(start),
       Instant.ofEpochMilli(start + 1000))
+  }
+
+  protected def newBindingActivation(ns: String, actionName: String, binding: String, start: Long): WhiskActivation = {
+    WhiskActivation(
+      EntityPath(ns),
+      EntityName(actionName),
+      Subject(),
+      ActivationId.generate(),
+      Instant.ofEpochMilli(start),
+      Instant.ofEpochMilli(start + 1000),
+      annotations = Parameters(WhiskActivation.bindingAnnotation, binding))
   }
 
   /**

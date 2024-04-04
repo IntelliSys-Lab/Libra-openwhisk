@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-FROM adoptopenjdk/openjdk8:jdk8u191-b12
+FROM adoptopenjdk/openjdk8:jdk8u262-b10
 
 ENV DOCKER_VERSION 1.12.0
 ENV KUBECTL_VERSION v1.16.3
@@ -34,6 +34,9 @@ RUN apt-get update && apt-get install -y \
   zip \
   locales \
 && rm -rf /var/lib/apt/lists/*
+
+# update npm
+RUN npm install -g n && n stable && hash -r
 
 RUN locale-gen en_US.UTF-8
 ENV LANG='en_US.UTF-8' LANGUAGE='en_US:en' LC_ALL='en_US.UTF-8'

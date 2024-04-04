@@ -29,6 +29,11 @@ distDocker.dependsOn ':common:scala:distDocker', 'distTar'
 
 project.archivesBaseName = "openwhisk-controller"
 
+scoverage {
+    scoverageVersion.set("${gradle.scala.scoverageVersion}")
+    scoverageScalaVersion.set("${gradle.scala.scoverageScalaVersion}")
+}
+
 ext.coverageDirs = [
     "${buildDir}/classes/scala/scoverage",
     "${project(':common:scala').buildDir.absolutePath}/classes/scala/scoverage"
@@ -36,16 +41,18 @@ ext.coverageDirs = [
 distDockerCoverage.dependsOn ':common:scala:scoverageClasses', 'scoverageClasses'
 
 dependencies {
-    compile "org.scala-lang:scala-library:${gradle.scala.version}"
-    compile "com.lightbend.akka.management:akka-management-cluster-bootstrap_${gradle.scala.depVersion}:${gradle.akka_management.version}"
-    compile "com.lightbend.akka.discovery:akka-discovery-kubernetes-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
-    compile "com.lightbend.akka.discovery:akka-discovery-marathon-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
-    compile project(':common:scala')
-    compile project(':core:invoker')
+    implementation "org.scala-lang:scala-library:${gradle.scala.version}"
+    implementation project(':common:scala')
+    implementation project(':core:invoker')
+    implementation project(':core:scheduler')
 
-    // Dependecies for Redis
-    compile group: 'redis.clients', name: 'jedis', version: '3.3.0' // https://mvnrepository.com/artifact/redis.clients/jedis
-    compile group: 'org.apache.commons', name: 'commons-pool2', version: '2.8.1' // https://mvnrepository.com/artifact/org.apache.commons/commons-pool2
+    implementation "com.lightbend.akka.management:akka-management-cluster-bootstrap_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+    implementation "com.lightbend.akka.discovery:akka-discovery-kubernetes-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+    implementation "com.lightbend.akka.discovery:akka-discovery-marathon-api_${gradle.scala.depVersion}:${gradle.akka_management.version}"
+
+    // https://mvnrepository.com/artifact/redis.clients/jedis
+    implementation group: 'redis.clients', name: 'jedis', version: '5.0.0'
+
 }
 
 mainClassName = "org.apache.openwhisk.core.controller.Controller"

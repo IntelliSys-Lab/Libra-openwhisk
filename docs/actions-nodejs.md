@@ -31,6 +31,32 @@ and demonstrate how to bundle multiple JavaScript files and third party dependen
   }
   ```
 
+  An action supports not only a JSON object but also a JSON array as a return value.
+
+  It would be a simple example that uses an array as a return value:
+
+  ```javascript
+  function main(params) {
+    return ["a", "b"];
+  }
+  ```
+
+  You can also create a sequence action with actions accepting an array param and returning an array result.
+
+  You can easily figure out the parameters with the following example:
+
+  ```javascript
+  /**
+   * Sort a set of lines.
+   * @param lines An array of strings to sort.
+   */
+  function main(msg) {
+      var lines = msg || [];
+      lines.sort();
+      return lines;
+  }
+  ```
+
   The JavaScript file might contain additional functions.
   However, by convention, a function called `main` must exist to provide the entry point for the action.
 
@@ -43,7 +69,7 @@ and demonstrate how to bundle multiple JavaScript files and third party dependen
 
   The CLI automatically infers the type of the action by using the source file extension.
   For `.js` source files, the action runs by using a Node.js runtime. You may specify
-  the Node.js runtime to use by explicitly specifying the parameter `--kind nodejs:14`, `--kind nodejs:12`, `--kind nodejs:10`, or `--kind nodejs:8`.
+  the Node.js runtime to use by explicitly specifying the parameter `--kind nodejs:18`, or `--kind nodejs:20`.
 
 
 ## Creating asynchronous actions
@@ -219,10 +245,10 @@ zip -r action.zip *
 - Create the action from the zip file.
 
 ```
-wsk action create packageAction --kind nodejs:10 action.zip
+wsk action create packageAction --kind nodejs:20 action.zip
 ```
 
-When creating an action from a `.zip` archive with the CLI tool, you must explicitly provide a value for the `--kind` flag by using `nodejs:12`, `nodejs:10`, `nodejs:8` or `nodejs:6`.
+When creating an action from a `.zip` archive with the CLI tool, you must explicitly provide a value for the `--kind` flag by using `nodejs:18`, or `nodejs:20`.
 
 - Invoke the action as normal.
 
@@ -268,7 +294,7 @@ zip -r action.zip *
 - Create new action with action archive.
 
 ```
-wsk action create my-action --kind nodejs:10 action.zip
+wsk action create my-action --kind nodejs:20 action.zip
 ```
 
 #### Building custom runtime image
@@ -353,7 +379,7 @@ npx rollup --config
 - Create an action using the bundle source file.
 
 ```
-wsk action create my-action bundle.js --kind nodejs:10
+wsk action create my-action bundle.js --kind nodejs:20
 ```
 
 - Invoke the action as normal. Results should be the same as the example above.
@@ -406,7 +432,7 @@ npx webpack --config webpack.config.js
 - Create an action using the bundle source file.
 
 ```
-wsk action create my-action dist/bundle.js --kind nodejs:10
+wsk action create my-action dist/bundle.js --kind nodejs:20
 ```
 
 - Invoke the action as normal. Results should be the same as the example above.
@@ -447,7 +473,7 @@ npm install parcel-bundler --save-dev
 - Create an action using the bundle source file.
 
 ```
-wsk action create my-action dist/index.js --kind nodejs:10
+wsk action create my-action dist/index.js --kind nodejs:20
 ```
 
 - Invoke the action as normal. Results should be the same as the example above.
@@ -459,33 +485,19 @@ wsk action invoke my-action --result --param lines "[\"and now\", \"for somethin
 
 ## Reference
 
-JavaScript actions can be executed in Node.js version 8, 10, 12 or 14.
-Currently actions are executed by default in a Node.js version 10 environment.
+JavaScript actions can be executed in Node.js version 18 or 20.
+Currently actions are executed by default in a Node.js version 20 environment.
 
-### Node.js version 8 environment
-The Node.js version 8 environment is used if the `--kind` flag is explicitly specified with a value of 'nodejs:8' when creating or updating an Action.
+### Node.js version 18 environment
+The Node.js version 18 environment is used if the `--kind` flag is explicitly specified with a value of 'nodejs:18' when creating or updating an Action.
 
-The following packages are pre-installed in the Node.js version 8 environment:
-
-- [openwhisk](https://www.npmjs.com/package/openwhisk) - JavaScript client library for the OpenWhisk platform. Provides a wrapper around the OpenWhisk APIs.
-
-### Node.js version 10 environment
-The Node.js version 10 environment is used if the `--kind` flag is explicitly specified with a value of 'nodejs:10' when creating or updating an Action.
-
-The following packages are pre-installed in the Node.js version 10 environment:
+The following packages are pre-installed in the Node.js version 18 environment:
 
 - [openwhisk](https://www.npmjs.com/package/openwhisk) - JavaScript client library for the OpenWhisk platform. Provides a wrapper around the OpenWhisk APIs.
 
-### Node.js version 12 environment
-The Node.js version 12 environment is used if the `--kind` flag is explicitly specified with a value of 'nodejs:12' when creating or updating an Action.
+### Node.js version 20 environment
+The Node.js version 20 environment is used if the `--kind` flag is explicitly specified with a value of 'nodejs:20' when creating or updating an Action.
 
-The following packages are pre-installed in the Node.js version 12 environment:
-
-- [openwhisk](https://www.npmjs.com/package/openwhisk) - JavaScript client library for the OpenWhisk platform. Provides a wrapper around the OpenWhisk APIs.
-
-### Node.js version 14 environment
-The Node.js version 14 environment is used if the `--kind` flag is explicitly specified with a value of 'nodejs:14' when creating or updating an Action.
-
-The following packages are pre-installed in the Node.js version 12 environment:
+The following packages are pre-installed in the Node.js version 20 environment:
 
 - [openwhisk](https://www.npmjs.com/package/openwhisk) - JavaScript client library for the OpenWhisk platform. Provides a wrapper around the OpenWhisk APIs.

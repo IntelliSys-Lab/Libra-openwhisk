@@ -53,9 +53,6 @@ RUN curl -sSL -o swagger-ui-v${SWAGGER_UI_VERSION}.tar.gz --no-verbose https://g
 # Copy app jars
 ADD build/distributions/controller.tar /
 
-# Copy Libra config file
-COPY config.libra /
-
 COPY init.sh /
 RUN chmod +x init.sh
 

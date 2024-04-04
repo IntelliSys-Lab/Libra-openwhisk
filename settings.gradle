@@ -15,9 +15,44 @@
  * limitations under the License.
  */
 
+plugins {
+    id 'com.gradle.enterprise' version '3.13.2'
+    id 'com.gradle.common-custom-user-data-gradle-plugin' version '1.10'
+}
+
+def isGithubActions = System.getenv('GITHUB_ACTIONS') != null
+def isJenkins = System.getenv('JENKINS_URL') != null
+def isCI = isGithubActions || isJenkins
+
+gradleEnterprise {
+    server = "https://ge.apache.org"
+    buildScan {
+        capture { taskInputFiles = true }
+        uploadInBackground = !isCI
+        publishAlways()
+        publishIfAuthenticated()
+        obfuscation {
+            // This obfuscates the IP addresses of the build machine in the build scan.
+            // Alternatively, the build scan will provide the hostname for troubleshooting host-specific issues.
+            ipAddresses { addresses -> addresses.collect { address -> "0.0.0.0"} }
+        }
+    }
+}
+
+buildCache {
+    local {
+        enabled = !isCI
+    }
+
+    remote(gradleEnterprise.buildCache) {
+        enabled = false
+    }
+}
+
 include 'common:scala'
 
 include 'core:controller'
+include 'core:scheduler'
 include 'core:invoker'
 include 'core:cosmosdb:cache-invalidator'
 include 'core:standalone'
@@ -42,6 +77,8 @@ if (scalaVersion == '2.12') {
     gradle.ext.scala = [
             version     : '2.12.10',
             depVersion  : '2.12',
+            scoverageScalaVersion : '2.12.15',
+            scoverageVersion : '1.4.11',
             compileFlags: ['-feature', '-unchecked', '-deprecation', '-Xfatal-warnings', '-Ywarn-unused-import']
     ]
 } else {
@@ -49,6 +86,8 @@ if (scalaVersion == '2.12') {
     gradle.ext.scala = [
             version     : '2.13.1',
             depVersion  : '2.13',
+            scoverageScalaVersion : '2.13.1',
+            scoverageVersion : '1.4.11',
             // We can't use fatal warnings yet because there are deprecated things in 2.13 that are not fixable
             // in 2.12.
             compileFlags: ['-feature', '-unchecked', '-deprecation']
@@ -60,10 +99,12 @@ gradle.ext.scalafmt = [
     config: new File(rootProject.projectDir, '.scalafmt.conf')
 ]
 
-gradle.ext.akka = [version : '2.5.26']
-gradle.ext.akka_kafka = [version : '2.0.2']
-gradle.ext.akka_http = [version : '10.1.11']
+gradle.ext.akka = [version : '2.6.12']
+gradle.ext.akka_kafka = [version : '2.0.5']
+gradle.ext.akka_http = [version : '10.2.4']
 gradle.ext.akka_management = [version : '1.0.5']
 
-gradle.ext.curator = [version : '4.0.0']
-gradle.ext.kube_client = [version: '4.4.2']
+gradle.ext.curator = [version : '4.3.0']
+gradle.ext.kube_client = [version: '4.10.3']
+
+gradle.ext.netty = [version : '4.1.87.Final']

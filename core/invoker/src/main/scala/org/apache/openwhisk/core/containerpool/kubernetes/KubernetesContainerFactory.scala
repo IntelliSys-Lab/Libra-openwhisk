@@ -62,16 +62,19 @@ class KubernetesContainerFactory(
 
   override def cleanup() = {
     logging.info(this, "Cleaning up function runtimes")
-    val cleaning = kubernetes.rm("invoker", label, true)(TransactionId.invokerNanny)
-    Await.ready(cleaning, 30.seconds)
+    val labels = Map("invoker" -> label, "release" -> KubernetesContainerFactoryProvider.release)
+    val cleaning = kubernetes.rm(labels, true)(TransactionId.invokerNanny)
+    Await.ready(cleaning, KubernetesContainerFactoryProvider.runtimeDeleteTimeout)
   }
 
-  override def createContainer(tid: TransactionId,
-                               name: String,
-                               actionImage: ImageName,
-                               userProvidedImage: Boolean,
-                               memory: ByteSize,
-                               cpuShares: Int)(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
+  override def createContainer(
+    tid: TransactionId,
+    name: String,
+    actionImage: ImageName,
+    userProvidedImage: Boolean,
+    memory: ByteSize,
+    cpuShares: Int,
+    cpuLimit: Option[Double])(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
     val image = actionImage.resolveImageName(Some(
       ContainerFactory.resolveRegistryConfig(userProvidedImage, runtimesRegistryConfig, userImagesRegistryConfig).url))
 
@@ -82,11 +85,15 @@ class KubernetesContainerFactory(
       userProvidedImage,
       memory,
       environment = Map("__OW_API_HOST" -> config.wskApiHost) ++ containerArgsConfig.extraEnvVarMap,
-      labels = Map("invoker" -> label))
+      labels = Map("invoker" -> label, "release" -> KubernetesContainerFactoryProvider.release))
   }
 }
 
 object KubernetesContainerFactoryProvider extends ContainerFactoryProvider {
+
+  val release = loadConfigOrThrow[String]("whisk.helm.release")
+  val runtimeDeleteTimeout = loadConfigOrThrow[FiniteDuration]("whisk.runtime.delete.timeout")
+
   override def instance(actorSystem: ActorSystem,
                         logging: Logging,
                         config: WhiskConfig,

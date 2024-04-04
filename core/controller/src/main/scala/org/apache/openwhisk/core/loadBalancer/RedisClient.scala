@@ -18,37 +18,38 @@
 package org.apache.openwhisk.core.loadBalancer
 
 import scala.collection.immutable.Map
-import org.apache.commons.pool2.impl.GenericObjectPoolConfig
-import redis.clients.jedis.{Response, JedisPool}
+
+import redis.clients.jedis.{JedisPool, JedisPoolConfig, Response}
 
 
 class RedisClient(
-  host: String = "172.17.0.1",
+  host: String = "",
   port: Int = 6379,
   password: String = "openwhisk",
   database: Int = 0
-) {
-  private var pool: JedisPool = _
-  val interval: Int = 100 // ms
+  ){
+    private var pool: JedisPool = _
+    val interval: Int = 100 //ms
 
-  def init: Unit = {
-    val maxTotal: Int = 300
-    val maxIdle: Int = 100
-    val minIdle: Int = 1
-    val timeout: Int = 30000
+    def init: Unit = {
+      val maxTotal: Int = 300
+      val maxIdle: Int = 100
+      val minIdle: Int = 1
+      val timeout: Int = 30000
 
-    val poolConfig = new GenericObjectPoolConfig()
-    poolConfig.setMaxTotal(maxTotal)
-    poolConfig.setMaxIdle(maxIdle)
-    poolConfig.setMinIdle(minIdle)
+      val poolConfig = new JedisPoolConfig()
+      poolConfig.setMaxTotal(maxTotal)
+      poolConfig.setMaxIdle(maxIdle)
+      poolConfig.setMinIdle(minIdle)
 
-    pool = new JedisPool(poolConfig, host, port, timeout, password, database)
-  }
+      pool = new JedisPool(poolConfig, host, port, timeout, password, database)
+    }
 
-  def getPool: JedisPool = {
-    assert(pool != null)
-    pool
-  }
+    def getPool: JedisPool = {
+      assert(pool != null)
+      pool
+    }
+
 
   //
   // Send observations to Redis

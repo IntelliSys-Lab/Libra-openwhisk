@@ -48,6 +48,7 @@ if __name__ == "__main__":
     # Set up connection to CouchDB
     couch = couchdb.Server(COUCH_LINK)
 
+
     # Init input dict
     input_dict = {
         "dh": {
@@ -103,6 +104,14 @@ if __name__ == "__main__":
         }
     }
 
+    # input_dict = {
+    #     "dh": {
+    #         "template.html": {
+    #             "path": "../workloads/python_dynamic_html/input/template.html",
+    #             "content_type": "text/html"
+    #         }
+    #     }
+    # }
     # Init workload input
     init_couchdb_workload(couch, input_dict)
 

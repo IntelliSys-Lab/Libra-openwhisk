@@ -34,26 +34,14 @@ SCRIPTDIR="$( dirname "$SOURCE" )"
 echo "*** installing basics"
 /bin/bash "$SCRIPTDIR/misc.sh"
 
-echo "*** installing python dependencies"
+echo "*** installing python dependences"
 /bin/bash "$SCRIPTDIR/pip.sh"
-
-echo "*** installing python3 dependencies"
-/bin/bash "$SCRIPTDIR/pip3.sh"
 
 echo "*** installing java"
 /bin/bash "$SCRIPTDIR/java8.sh" $JAVA_SOURCE
 
 echo "*** installing ansible"
 /bin/bash "$SCRIPTDIR/ansible.sh"
-
-echo "*** installing npm"
-/bin/bash "$SCRIPTDIR/npm.sh"
-
-echo "*** installing ssh dependencies"
-/bin/bash "$SCRIPTDIR/ssh.sh"
-
-echo "*** installing redis tools"
-/bin/bash "$SCRIPTDIR/redis.sh"
 
 # WARNING:
 #

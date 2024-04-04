@@ -29,11 +29,13 @@ import akka.http.scaladsl.model.StatusCodes.Conflict
 import akka.http.scaladsl.model.StatusCodes.InternalServerError
 import akka.http.scaladsl.model.StatusCodes.NotFound
 import akka.http.scaladsl.model.StatusCodes.OK
+import akka.http.scaladsl.model.StatusCodes.NoContent
 import akka.http.scaladsl.server.{Directives, RequestContext, RouteResult}
 import spray.json.DefaultJsonProtocol._
 import spray.json.{JsObject, JsValue, RootJsonFormat}
 import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.TransactionId
+import org.apache.openwhisk.core.FeatureFlags
 import org.apache.openwhisk.core.controller.PostProcess.PostProcessEntity
 import org.apache.openwhisk.core.database._
 import org.apache.openwhisk.core.entity.{ActivationId, ActivationLogs, DocId, WhiskActivation, WhiskDocument}
@@ -318,7 +320,7 @@ trait WriteOps extends Directives {
     // marker to return an existing doc with status OK rather than conflict if overwrite is false
     case class IdentityPut(self: A) extends Throwable
 
-    onComplete(factory.get(datastore, docid) flatMap { doc =>
+    onComplete(factory.get(datastore, docid, ignoreMissingAttachment = overwrite) flatMap { doc =>
       if (overwrite) {
         logging.debug(this, s"[PUT] entity exists, will try to update '$doc'")
         update(doc).map(updatedDoc => (Some(doc), updatedDoc))
@@ -341,7 +343,8 @@ trait WriteOps extends Directives {
     }) {
       case Success(entity) =>
         logging.debug(this, s"[PUT] entity success")
-        postProcess map { _(entity) } getOrElse complete(OK, entity)
+        if (FeatureFlags.requireResponsePayload) postProcess map { _(entity) } getOrElse complete(OK, entity)
+        else postProcess map { _(entity) } getOrElse complete(OK)
       case Failure(IdentityPut(a)) =>
         logging.debug(this, s"[PUT] entity exists, not overwritten")
         complete(OK, a)
@@ -389,7 +392,7 @@ trait WriteOps extends Directives {
     format: RootJsonFormat[A],
     notifier: Option[CacheChangeNotification],
     ma: Manifest[A]) = {
-    onComplete(factory.get(datastore, docid) flatMap { entity =>
+    onComplete(factory.get(datastore, docid, ignoreMissingAttachment = true) flatMap { entity =>
       confirm(entity) flatMap {
         case _ =>
           factory.del(datastore, entity.docinfo) map { _ =>
@@ -399,7 +402,8 @@ trait WriteOps extends Directives {
     }) {
       case Success(entity) =>
         logging.debug(this, s"[DEL] entity success")
-        postProcess map { _(entity) } getOrElse complete(OK, entity)
+        if (FeatureFlags.requireResponsePayload) postProcess map { _(entity) } getOrElse complete(OK, entity)
+        else postProcess map { _(entity) } getOrElse complete(NoContent)
       case Failure(t: NoDocumentException) =>
         logging.debug(this, s"[DEL] entity does not exist")
         terminate(NotFound)

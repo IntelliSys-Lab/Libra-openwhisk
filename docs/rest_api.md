@@ -316,6 +316,15 @@ curl -u $AUTH https://$APIHOST/api/v1/namespaces/_/packages/iot?overwrite=true \
 -d '{"namespace":"_","name":"iot"}'
 ```
 
+To force delete a package that contains entities, set the force parameter to true. Failure
+will return an error either for failure to delete an action within the package or the package itself.
+The package will not be attempted to be deleted until all actions are successfully deleted.
+
+```bash
+curl -u $AUTH https://$APIHOST/api/v1/namespaces/_/packages/iot?force=true \
+-X DELETE
+```
+
 ## Activations
 
 To get the list of the last 3 activations use a HTTP request with a `GET` method, passing the query parameter `limit=3`
@@ -330,7 +339,7 @@ curl -u $AUTH https://$APIHOST/api/v1/namespaces/_/activations/f81dfddd7156401a8
 
 ## Limits
 
-To get the limits set for a namespace (i.e. invocationsPerMinute, concurrentInvocations, firesPerMinute)
+To get the limits set for a namespace (i.e. invocationsPerMinute, concurrentInvocations, firesPerMinute, actionMemoryMax, actionLogsMax...)
 ```bash
 curl -u $AUTH https://$APIHOST/api/v1/namespaces/_/limits
 ```

@@ -4,7 +4,7 @@
 REDIS_KEY_PATTERN="${REDIS_KEY_PATTERN:-*}"
 
 # Connect to redis-cli
-REDIS_HOST=`cat ../ansible/environments/distributed/hosts | grep -A 1 "\[edge\]" | grep "ansible_host" | awk {'print $1'}`
+REDIS_HOST=`cat ../ansible/environments/local/hosts | grep -A 1 "\[edge\]" | grep "ansible_host" | awk {'print $1'}`
 REDIS_PORT="6379"
 REDIS_PASSWORD="openwhisk"
 

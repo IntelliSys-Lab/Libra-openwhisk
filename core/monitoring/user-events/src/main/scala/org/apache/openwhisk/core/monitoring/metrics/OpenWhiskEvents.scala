@@ -21,7 +21,6 @@ import akka.actor.{ActorSystem, CoordinatedShutdown}
 import akka.event.slf4j.SLF4JLogging
 import akka.http.scaladsl.Http
 import akka.kafka.ConsumerSettings
-import akka.stream.ActorMaterializer
 import com.typesafe.config.Config
 import kamon.Kamon
 import kamon.prometheus.PrometheusReporter
@@ -29,6 +28,7 @@ import org.apache.kafka.common.serialization.StringDeserializer
 import pureconfig._
 import pureconfig.generic.auto._
 
+import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{ExecutionContext, Future}
 
 object OpenWhiskEvents extends SLF4JLogging {
@@ -36,10 +36,12 @@ object OpenWhiskEvents extends SLF4JLogging {
   case class MetricConfig(port: Int,
                           enableKamon: Boolean,
                           ignoredNamespaces: Set[String],
-                          renameTags: Map[String, String])
+                          renameTags: Map[String, String],
+                          retry: RetryConfig)
 
-  def start(config: Config)(implicit system: ActorSystem,
-                            materializer: ActorMaterializer): Future[Http.ServerBinding] = {
+  case class RetryConfig(minBackoff: FiniteDuration, maxBackoff: FiniteDuration, randomFactor: Double, maxRestarts: Int)
+
+  def start(config: Config)(implicit system: ActorSystem): Future[Http.ServerBinding] = {
     implicit val ec: ExecutionContext = system.dispatcher
 
     val prometheusReporter = new PrometheusReporter()
@@ -57,7 +59,7 @@ object OpenWhiskEvents extends SLF4JLogging {
     }
     val port = metricConfig.port
     val api = new PrometheusEventsApi(eventConsumer, prometheusRecorder)
-    val httpBinding = Http().bindAndHandle(api.routes, "0.0.0.0", port)
+    val httpBinding = Http().newServerAt("0.0.0.0", port).bindFlow(api.routes)
     httpBinding.foreach(_ => log.info(s"Started the http server on http://localhost:$port"))(system.dispatcher)
     httpBinding
   }

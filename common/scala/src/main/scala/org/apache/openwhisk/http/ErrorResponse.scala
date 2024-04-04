@@ -20,7 +20,6 @@ package org.apache.openwhisk.http
 import scala.concurrent.duration.Duration
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Try
-
 import akka.http.scaladsl.model.StatusCode
 import akka.http.scaladsl.model.StatusCodes.Forbidden
 import akka.http.scaladsl.model.StatusCodes.NotFound
@@ -28,9 +27,7 @@ import akka.http.scaladsl.model.MediaType
 import akka.http.scaladsl.server.Directives
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport.sprayJsonMarshaller
 import akka.http.scaladsl.server.StandardRoute
-
 import spray.json._
-
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.entity.SizeError
 import org.apache.openwhisk.core.entity.ByteSize
@@ -71,8 +68,15 @@ object Messages {
     s"Too many requests in the last minute (count: $count, allowed: $allowed)."
 
   /** Standard message for too many concurrent activation requests within a time window. */
+  val tooManyConcurrentRequests = s"Too many concurrent requests in flight."
   def tooManyConcurrentRequests(count: Int, allowed: Int) =
     s"Too many concurrent requests in flight (count: $count, allowed: $allowed)."
+
+  def maxActionInstanceConcurrencyExceedsNamespace(namespaceConcurrencyLimit: Int) =
+    s"Max action instance concurrency must not exceed your namespace concurrency of $namespaceConcurrencyLimit."
+
+  def belowMinAllowedActionInstanceConcurrency(minThreshold: Int) =
+    s"Action container concurrency must be greater than or equal to $minThreshold."
 
   /** System overload message. */
   val systemOverloaded = "System is overloaded, try again later."
@@ -96,6 +100,12 @@ object Messages {
   /** Standard error for malformed activation id. */
   val activationIdIllegal = "The activation id is not valid."
   def activationIdLengthError(error: SizeError) = {
+    s"${error.field} length is ${error.is.toBytes} but must be ${error.allowed.toBytes}."
+  }
+
+  /** Standard error for malformed creation id. */
+  val creationIdIllegal = "The creation id is not valid."
+  def creationIdLengthError(error: SizeError) = {
     s"${error.field} length is ${error.is.toBytes} but must be ${error.allowed.toBytes}."
   }
 
@@ -153,6 +163,25 @@ object Messages {
     s"${error.field} larger than allowed: ${error.is.toBytes} > ${error.allowed.toBytes} bytes."
   }
 
+  def sizeExceedsAllowedThreshold(field: String, is: Int, allowed: Int) = {
+    s"${field} size ${is} MB exceeds allowed threshold of ${allowed} MB"
+  }
+  def sizeBelowAllowedThreshold(field: String, is: Int, allowed: Int) = {
+    s"${field} size ${is} MB below allowed threshold of ${allowed} MB"
+  }
+  def durationBelowAllowedThreshold(field: String, is: FiniteDuration, allowed: FiniteDuration) = {
+    s"${field} ${is.toMillis} milliseconds below allowed threshold of ${allowed.toMillis} milliseconds"
+  }
+  def durationExceedsAllowedThreshold(field: String, is: FiniteDuration, allowed: FiniteDuration) = {
+    s"${field} ${is.toMillis} milliseconds exceeds allowed threshold of ${allowed.toMillis} milliseconds"
+  }
+  def concurrencyExceedsAllowedThreshold(is: Int, allowed: Int) = {
+    s"concurrency $is exceeds allowed threshold of $allowed"
+  }
+  def concurrencyBelowAllowedThreshold(is: Int, allowed: Int) = {
+    s"concurrency $is below allowed threshold of $allowed"
+  }
+
   def listLimitOutOfRange(collection: String, value: Int, max: Int) = {
     s"The value '$value' is not in the range of 0 to $max for $collection."
   }
@@ -197,7 +226,7 @@ object Messages {
   }
 
   def invalidRunResponse(actualResponse: String) = {
-    "The action did not produce a valid JSON response" + {
+    "The action did not produce a valid JSON or JSON Array response" + {
       Option(actualResponse) filter { _.nonEmpty } map { s =>
         s": $s"
       } getOrElse "."
@@ -219,16 +248,29 @@ object Messages {
   }
 
   val namespacesBlacklisted = "The action was not invoked due to a blacklisted namespace."
+  val namespaceLimitUnderZero = "The namespace limit is less than or equal to 0."
 
   val actionRemovedWhileInvoking = "Action could not be found or may have been deleted."
   val actionMismatchWhileInvoking = "Action version is not compatible and cannot be invoked."
   val actionFetchErrorWhileInvoking = "Action could not be fetched."
+  val actionLimitExceededSystemLimit = "Action limit exceeded the system limit."
 
   /** Indicates that the image could not be pulled. */
   def imagePullError(image: String) = s"Failed to pull container image '$image'."
 
+  def commandNotFoundError = "executable file not found"
+
   /** Indicates that the container for the action could not be started. */
   val resourceProvisionError = "Failed to provision resources to run the action."
+
+  def forbiddenGetActionBinding(entityDocId: String) =
+    s"GET not permitted for '$entityDocId'. Resource does not exist or is an action in a shared package binding."
+  def forbiddenGetAction(entityPath: String) =
+    s"GET not permitted for '$entityPath' since it's an action in a shared package"
+  def forbiddenGetPackageBinding(packageName: String) =
+    s"GET not permitted since $packageName is a binding of a shared package"
+  def forbiddenGetPackage(packageName: String) =
+    s"GET not permitted for '$packageName' since it's a shared package"
 }
 
 /** Replaces rejections with Json object containing cause and transaction id. */

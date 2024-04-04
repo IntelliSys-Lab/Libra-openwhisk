@@ -22,7 +22,7 @@ def get_redis_client(
 def get_invoker_name():
     invoker_hostname = socket.gethostname()
     invoker_ip = socket.gethostbyname(invoker_hostname)
-    invoker_name = run_cmd('cat ../ansible/environments/distributed/hosts | grep "invoker" | grep "{}" | awk {}'.format("={}$".format(invoker_ip), "{'print $1'}"))
+    invoker_name = run_cmd('cat ../ansible/environments/local/hosts | grep "invoker" | grep "{}" | awk {}'.format("={}$".format(invoker_ip), "{'print $1'}"))
 
     return invoker_name
 

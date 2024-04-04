@@ -20,7 +20,6 @@ package org.apache.openwhisk.core.containerpool.kubernetes.test
 import java.time.Instant
 
 import akka.actor.ActorSystem
-import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Concat, Sink, Source}
 
 import scala.concurrent.Await
@@ -56,8 +55,6 @@ class KubernetesClientTests
     with WskActorSystem {
 
   import KubernetesClientTests._
-
-  implicit val materializer: ActorMaterializer = ActorMaterializer()
 
   val commandTimeout = 500.milliseconds
   def await[A](f: Future[A], timeout: FiniteDuration = commandTimeout) = Await.result(f, timeout)
@@ -212,9 +209,11 @@ object KubernetesClientTests {
       rms += ContainerId(podName)
       Future.successful(())
     }
-    def rm(key: String, value: String, ensureUnpause: Boolean = false)(
+    def rm(labels: Map[String, String], ensureUnpause: Boolean = false)(
       implicit transid: TransactionId): Future[Unit] = {
-      rmByLabels += ((key, value))
+      labels.foreach { label =>
+        rmByLabels += ((label._1, label._2))
+      }
       Future.successful(())
     }
 
@@ -232,6 +231,10 @@ object KubernetesClientTests {
       implicit transid: TransactionId): Source[TypedLogLine, Any] = {
       logCalls += ((container.id, sinceTime))
       Source(List.empty[TypedLogLine])
+    }
+
+    override def addLabel(container: KubernetesContainer, labels: Map[String, String]): Future[Unit] = {
+      Future.successful({})
     }
   }
 }

@@ -225,7 +225,8 @@ class Request():
     def try_update(self, result_dict, system_runtime, couch_link, pool):
         # Update couchdb
         couch_client = couchdb.Server(couch_link)
-        couch_activations = couch_client["whisk_distributed_activations"]
+        # couch_activations = couch_client["whisk_distributed_activations"]
+        couch_activations = couch_client["whisk_local_activations"]
         doc = couch_activations.get("guest/{}".format(self.request_id))
         result = result_dict[self.function_id][self.request_id]
 

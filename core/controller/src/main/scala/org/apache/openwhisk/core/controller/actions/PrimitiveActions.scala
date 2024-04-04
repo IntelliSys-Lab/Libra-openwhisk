@@ -21,8 +21,8 @@ import java.time.{Clock, Instant}
 
 import akka.actor.ActorSystem
 import akka.event.Logging.InfoLevel
+import spray.json.DefaultJsonProtocol._
 import spray.json._
-
 import org.apache.openwhisk.common.tracing.WhiskTracerProvider
 import org.apache.openwhisk.common.{Logging, LoggingMarkers, TransactionId, UserEvents}
 import org.apache.openwhisk.core.connector.{ActivationMessage, EventMessage, MessagingProvider}
@@ -37,13 +37,13 @@ import org.apache.openwhisk.http.Messages._
 import org.apache.openwhisk.spi.SpiLoader
 import org.apache.openwhisk.utils.ExecutionContextFactory.FutureExtensions
 import org.apache.openwhisk.core.ConfigKeys
+import org.apache.openwhisk.core.containerpool.Interval
 
 import scala.collection.mutable.Buffer
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.language.postfixOps
 import scala.util.{Failure, Success}
-
 import pureconfig._
 import pureconfig.generic.auto._
 
@@ -80,7 +80,7 @@ protected[actions] trait PrimitiveActions {
     user: Identity,
     action: WhiskActionMetaData,
     components: Vector[FullyQualifiedEntityName],
-    payload: Option[JsObject],
+    payload: Option[JsValue],
     waitForOutermostResponse: Option[FiniteDuration],
     cause: Option[ActivationId],
     topmost: Boolean,
@@ -109,7 +109,7 @@ protected[actions] trait PrimitiveActions {
   protected[actions] def invokeSingleAction(
     user: Identity,
     action: ExecutableWhiskActionMetaData,
-    payload: Option[JsObject],
+    payload: Option[JsValue],
     waitForResponse: Option[FiniteDuration],
     cause: Option[ActivationId])(implicit transid: TransactionId): Future[Either[ActivationId, WhiskActivation]] = {
 
@@ -152,12 +152,16 @@ protected[actions] trait PrimitiveActions {
   private def invokeSimpleAction(
     user: Identity,
     action: ExecutableWhiskActionMetaData,
-    payload: Option[JsObject],
+    payload: Option[JsValue],
     waitForResponse: Option[FiniteDuration],
     cause: Option[ActivationId])(implicit transid: TransactionId): Future[Either[ActivationId, WhiskActivation]] = {
 
     // merge package parameters with action (action parameters supersede), then merge in payload
-    val args = action.parameters merge payload
+    val args: Option[JsValue] = payload match {
+      case Some(JsObject(fields))  => action.parameters merge Some(JsObject(fields))
+      case Some(JsArray(elements)) => Some(JsArray(elements))
+      case _                       => Some(action.parameters.toJsObject)
+    }
     val activationId = activationIdFactory.make()
 
     val startActivation = transid.started(
@@ -169,6 +173,10 @@ protected[actions] trait PrimitiveActions {
     val startLoadbalancer =
       transid.started(this, LoggingMarkers.CONTROLLER_LOADBALANCER, s"action activation id: ${activationId}")
 
+    val keySet = payload match {
+      case Some(JsObject(fields)) => Some(fields.keySet)
+      case _                      => None
+    }
     val message = ActivationMessage(
       transid,
       FullyQualifiedEntityName(action.namespace, action.name, Some(action.version), action.binding),
@@ -179,6 +187,7 @@ protected[actions] trait PrimitiveActions {
       waitForResponse.isDefined,
       args,
       action.parameters.initParameters,
+      action.parameters.lockedParameters(keySet.getOrElse(Set.empty)),
       cause = cause,
       WhiskTracerProvider.tracer.getTraceContext(transid))
 
@@ -270,7 +279,7 @@ protected[actions] trait PrimitiveActions {
    */
   private def invokeComposition(user: Identity,
                                 action: ExecutableWhiskActionMetaData,
-                                payload: Option[JsObject],
+                                payload: Option[JsValue],
                                 waitForResponse: Option[FiniteDuration],
                                 cause: Option[ActivationId],
                                 accounting: Option[CompositionAccounting] = None)(
@@ -290,7 +299,7 @@ protected[actions] trait PrimitiveActions {
     logging.info(this, s"invoking composition $action topmost ${cause.isEmpty} activationid '${session.activationId}'")
 
     val response: Future[Either[ActivationId, WhiskActivation]] =
-      invokeConductor(user, payload, session).map(response =>
+      invokeConductor(user, payload, session, transid).map(response =>
         Right(completeActivation(user, session, response, waitForResponse.isDefined)))
 
     // is caller waiting for the result of the activation?
@@ -315,19 +324,27 @@ protected[actions] trait PrimitiveActions {
    * @param user the identity invoking the action
    * @param payload the dynamic arguments for the activation
    * @param session the session object for this composition
-   * @param transid a transaction id for logging
+   * @param parentTid a parent transaction id
    */
-  private def invokeConductor(user: Identity, payload: Option[JsObject], session: Session)(
-    implicit transid: TransactionId): Future[ActivationResponse] = {
+  private def invokeConductor(user: Identity,
+                              payload: Option[JsValue],
+                              session: Session,
+                              parentTid: TransactionId): Future[ActivationResponse] = {
+
+    implicit val transid: TransactionId = TransactionId.childOf(parentTid)
 
     if (session.accounting.conductors > 2 * actionSequenceLimit) {
       // composition is too long
       Future.successful(ActivationResponse.applicationError(compositionIsTooLong))
     } else {
       // inject state into payload if any
-      val params = session.state
-        .map(state => Some(JsObject(payload.getOrElse(JsObject.empty).fields ++ state.fields)))
-        .getOrElse(payload)
+      val params: Option[JsValue] = payload match {
+        case Some(JsObject(fields)) =>
+          session.state
+            .map(state => Some(JsObject(JsObject(fields).fields ++ state.fields)))
+            .getOrElse(payload)
+        case _ => None
+      }
 
       // invoke conductor action
       session.accounting.conductors += 1
@@ -365,19 +382,21 @@ protected[actions] trait PrimitiveActions {
             case Some(next) =>
               FullyQualifiedEntityName.resolveName(next, user.namespace.name) match {
                 case Some(fqn) if session.accounting.components < actionSequenceLimit =>
-                  tryInvokeNext(user, fqn, params, session)
+                  tryInvokeNext(user, fqn, params, session, transid)
 
                 case Some(_) => // composition is too long
                   invokeConductor(
                     user,
                     payload = Some(JsObject(ERROR_FIELD -> JsString(compositionIsTooLong))),
-                    session = session)
+                    session = session,
+                    transid)
 
                 case None => // parsing failure
                   invokeConductor(
                     user,
                     payload = Some(JsObject(ERROR_FIELD -> JsString(compositionComponentInvalid(next)))),
-                    session = session)
+                    session = session,
+                    transid)
 
               }
           }
@@ -395,8 +414,14 @@ protected[actions] trait PrimitiveActions {
    * @param session the session for the current activation
    * @return promise for the eventual activation
    */
-  private def tryInvokeNext(user: Identity, fqn: FullyQualifiedEntityName, params: Option[JsObject], session: Session)(
-    implicit transid: TransactionId): Future[ActivationResponse] = {
+  private def tryInvokeNext(user: Identity,
+                            fqn: FullyQualifiedEntityName,
+                            params: Option[JsObject],
+                            session: Session,
+                            parentTid: TransactionId): Future[ActivationResponse] = {
+
+    implicit val transid: TransactionId = TransactionId.childOf(parentTid)
+
     val resource = Resource(fqn.path, Collection(Collection.ACTIONS), Some(fqn.name.asString))
     entitlementProvider
       .check(user, Privilege.ACTIVATE, Set(resource), noThrottle = true)
@@ -415,7 +440,8 @@ protected[actions] trait PrimitiveActions {
               invokeConductor(
                 user,
                 payload = Some(JsObject(ERROR_FIELD -> JsString(compositionComponentNotFound(fqn.asString)))),
-                session = session)
+                session = session,
+                transid)
           }
       }
       .recoverWith {
@@ -424,7 +450,8 @@ protected[actions] trait PrimitiveActions {
           invokeConductor(
             user,
             payload = Some(JsObject(ERROR_FIELD -> JsString(compositionComponentNotAccessible(fqn.asString)))),
-            session = session)
+            session = session,
+            transid)
       }
   }
 
@@ -480,7 +507,7 @@ protected[actions] trait PrimitiveActions {
       case Left(response) => // unsuccessful invocation, return error response
         Future.successful(response)
       case Right(activation) => // reinvoke conductor on component result
-        invokeConductor(user, payload = Some(activation.resultAsJson), session = session)
+        invokeConductor(user, payload = Some(activation.resultAsJson), session = session, transid)
     }
   }
 
@@ -544,6 +571,13 @@ protected[actions] trait PrimitiveActions {
       Parameters(WhiskActivation.causedByAnnotation, JsString(Exec.SEQUENCE))
     }
 
+    // set waitTime for conductor action
+    val waitTime = {
+      Parameters(
+        WhiskActivation.waitTimeAnnotation,
+        Interval(transid.meta.start, session.start).duration.toMillis.toJson)
+    }
+
     // set binding if invoked action is in a package binding
     val binding =
       session.action.binding.map(f => Parameters(WhiskActivation.bindingAnnotation, JsString(f.asString)))
@@ -567,7 +601,7 @@ protected[actions] trait PrimitiveActions {
         Parameters(WhiskActivation.pathAnnotation, JsString(session.action.fullyQualifiedName(false).asString)) ++
         Parameters(WhiskActivation.kindAnnotation, JsString(Exec.SEQUENCE)) ++
         Parameters(WhiskActivation.conductorAnnotation, JsTrue) ++
-        causedBy ++ binding ++
+        causedBy ++ waitTime ++ binding ++
         sequenceLimits,
       duration = Some(session.duration))
 
@@ -578,7 +612,10 @@ protected[actions] trait PrimitiveActions {
       }
     }
 
-    activationStore.storeAfterCheck(activation, blockingComposition, None, context)(transid, notifier = None, logging)
+    activationStore.storeAfterCheck(activation, blockingComposition, None, None, context)(
+      transid,
+      notifier = None,
+      logging)
 
     activation
   }

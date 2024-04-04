@@ -27,7 +27,6 @@ import org.apache.openwhisk.common.TransactionId
 import scala.util.Success
 import org.apache.openwhisk.common.LoggingMarkers
 import org.apache.openwhisk.common.Logging
-import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.ConfigKeys
 import pureconfig._
 import pureconfig.generic.auto._
@@ -39,7 +38,7 @@ import scala.concurrent.duration.Duration
 /**
  * Configuration for runc client command timeouts.
  */
-case class RuncClientTimeouts(pause: Duration, resume: Duration, update: Duration)
+case class RuncClientTimeouts(pause: Duration, resume: Duration)
 
 /**
  * Serves as interface to the docker CLI tool.
@@ -64,21 +63,6 @@ class RuncClient(timeouts: RuncClientTimeouts = loadConfigOrThrow[RuncClientTime
 
   def resume(id: ContainerId)(implicit transid: TransactionId): Future[Unit] =
     runCmd(Seq("resume", id.asString), timeouts.resume).map(_ => ())
-
-  def update(id: ContainerId, cpuShares: Int, memory: ByteSize)(implicit transid: TransactionId): Future[Unit] = {
-    var cmd = Seq(
-      "update",
-      // "--cpu-share", 
-      "--cpus", 
-      cpuShares.toString,
-      "--memory", 
-      s"${memory.toMB}m",
-      "--memory-swap",
-      s"${memory.toMB}m",
-      id.asString
-    )
-    runCmd(cmd, timeouts.update).map(_ => ())
-  }
 
   private def runCmd(args: Seq[String], timeout: Duration)(implicit transid: TransactionId): Future[String] = {
     val cmd = runcCmd ++ args
@@ -111,14 +95,4 @@ trait RuncApi {
    * @return a Future completing according to the command's exit-code
    */
   def resume(id: ContainerId)(implicit transid: TransactionId): Future[Unit]
-
-  /**
-   * Update the container with given cpuShares and memory.
-   *
-   * @param id the id of container to update
-   * @param cpuShares the cpushare size to update
-   * @param memory the memory size to update
-   * @return a Future completing according to the command's exit-code
-   */
-  def update(id: ContainerId, cpuShares: Int, memory: ByteSize)(implicit transid: TransactionId): Future[Unit]
 }

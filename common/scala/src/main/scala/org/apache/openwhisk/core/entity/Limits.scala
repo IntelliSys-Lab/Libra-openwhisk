@@ -37,7 +37,7 @@ protected[entity] abstract class Limits {
  * Limits on a specific action. Includes the following properties
  * {
  *   timeout: maximum duration in msecs an action is allowed to consume in [100 msecs, 5 minutes],
- *   memory: maximum memory in megabytes an action is allowed to consume within system limit, default [128 MB, 512 MB],
+ *   memory: maximum memory in megabytes an action is allowed to consume within namespace limit, default [128 MB, 512 MB],
  *   logs: maximum logs line in megabytes an action is allowed to generate [10 MB],
  *   concurrency: maximum number of concurrently processed activations per container [1, 200]
  * }
@@ -46,13 +46,23 @@ protected[entity] abstract class Limits {
  * @param memory the memory limit in megabytes, assured to be non-null because it is a value
  * @param logs the limit for logs written by the container and stored in the activation record, assured to be non-null because it is a value
  * @param concurrency the limit on concurrently processed activations per container, assured to be non-null because it is a value
+ * @param instances the limit in which an action can scale up to within the confines of the namespace's concurrency limit
  */
 protected[core] case class ActionLimits(timeout: TimeLimit = TimeLimit(),
                                         memory: MemoryLimit = MemoryLimit(),
                                         logs: LogLimit = LogLimit(),
-                                        concurrency: ConcurrencyLimit = ConcurrencyLimit())
+                                        concurrency: IntraConcurrencyLimit = IntraConcurrencyLimit(),
+                                        instances: Option[InstanceConcurrencyLimit] = None)
     extends Limits {
   override protected[entity] def toJson = ActionLimits.serdes.write(this)
+
+  @throws[ActionLimitsException]
+  def checkLimits(user: Identity): Unit = {
+    timeout.checkNamespaceLimit(user)
+    memory.checkNamespaceLimit(user)
+    concurrency.checkNamespaceLimit(user)
+    logs.checkNamespaceLimit(user)
+  }
 }
 
 /**
@@ -65,19 +75,19 @@ protected[core] case class TriggerLimits protected[core] () extends Limits {
 protected[core] object ActionLimits extends ArgNormalizer[ActionLimits] with DefaultJsonProtocol {
 
   override protected[core] implicit val serdes = new RootJsonFormat[ActionLimits] {
-    val helper = jsonFormat4(ActionLimits.apply)
+    val helper = jsonFormat5(ActionLimits.apply)
 
     def read(value: JsValue) = {
       val obj = Try {
         value.asJsObject.convertTo[Map[String, JsValue]]
       } getOrElse deserializationError("no valid json object passed")
 
-      val time = TimeLimit.serdes.read(obj.get("timeout") getOrElse deserializationError("'timeout' is missing"))
-      val memory = MemoryLimit.serdes.read(obj.get("memory") getOrElse deserializationError("'memory' is missing"))
-      val logs = obj.get("logs") map { LogLimit.serdes.read(_) } getOrElse LogLimit()
-      val concurrency = obj.get("concurrency") map { ConcurrencyLimit.serdes.read(_) } getOrElse ConcurrencyLimit()
-
-      ActionLimits(time, memory, logs, concurrency)
+      val time = TimeLimit.serdes.read(obj.getOrElse("timeout", deserializationError("'timeout' is missing")))
+      val memory = MemoryLimit.serdes.read(obj.getOrElse("memory", deserializationError("'memory' is missing")))
+      val logs = obj.get("logs") map { LogLimit.serdes.read } getOrElse LogLimit()
+      val concurrency = obj.get("concurrency") map { IntraConcurrencyLimit.serdes.read } getOrElse IntraConcurrencyLimit()
+      val instances = obj.get("instances") map { InstanceConcurrencyLimit.serdes.read }
+      ActionLimits(time, memory, logs, concurrency, instances)
     }
 
     def write(a: ActionLimits) = helper.write(a)

@@ -3,7 +3,7 @@ import io
 import os
 import sys
 from multiprocessing import Process, Pipe
-from threading import Thread
+from threading import Thread, Event
 from queue import Queue
 
 from PIL import Image
@@ -51,11 +51,12 @@ def resize_image(db, per_size, w, h, childConn, clientId):
     childConn.close()
 
 def handler(event, context=None):
+    stop_signal = Event()
     q_cpu = Queue()
     q_mem = Queue()
     t = Thread(
         target=monitor_peak,
-        args=(interval, q_cpu, q_mem),
+        args=(interval, q_cpu, q_mem, stop_signal),
         daemon=True
     )
     t.start()

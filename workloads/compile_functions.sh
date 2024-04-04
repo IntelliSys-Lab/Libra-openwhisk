@@ -1,5 +1,8 @@
 #! /bin/bash
 
+
+set -e
+
 echo ""
 echo "Compiling functions..."
 echo ""
@@ -77,52 +80,52 @@ cd ../../../
 # video-processing (vp)
 #
 
-cd python_video_processing/deploy
+# cd python_video_processing/deploy
 
-# Destroy and prepare build folder.
-rm -rf build
-mkdir build
+# # Destroy and prepare build folder.
+# rm -rf build
+# mkdir build
 
-# Install virtualenv
-sudo docker run --rm -v "$PWD:/tmp" openwhisk/python3action bash \
-  -c "cd tmp && virtualenv virtualenv && source virtualenv/bin/activate && pip3 install -r requirements.txt"
+# # Install virtualenv
+# sudo docker run --rm -v "$PWD:/tmp" openwhisk/python3action bash \
+#   -c "cd tmp && virtualenv virtualenv && source virtualenv/bin/activate && pip3 install -r requirements.txt"
 
-# Copy files to build folder.
-cp -R ../src/* ./build
-cp -R ../platforms/ibm/* ./build
-cp -R virtualenv ./build
+# # Copy files to build folder.
+# cp -R ../src/* ./build
+# cp -R ../platforms/ibm/* ./build
+# cp -R virtualenv ./build
 
-# Install non-pip dependency
-wget -q https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -P "./build"
-pushd "./build" > /dev/null
-tar -xf ffmpeg-release-amd64-static.tar.xz
-rm *.tar.xz
-mv ffmpeg-* ffmpeg
-popd > /dev/null
+# # Install non-pip dependency
+# wget -q https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -P "./build"
+# pushd "./build" > /dev/null
+# tar -xf ffmpeg-release-amd64-static.tar.xz
+# rm *.tar.xz
+# mv ffmpeg-* ffmpeg
+# popd > /dev/null
 
-cd ./build
-zip -X -r ./index.zip *
+# cd ./build
+# zip -X -r ./index.zip *
 
-cd ../../../
+# cd ../../../
 
-#
-# image-recognition (ir)
-#
+# #
+# # image-recognition (ir)
+# #
 
-cd python_image_recognition/deploy
+# cd python_image_recognition/deploy
 
-# Destroy and prepare build folder.
-rm -rf build
-mkdir build
+# # Destroy and prepare build folder.
+# rm -rf build
+# mkdir build
 
-# Copy files to build folder.
-cp -R ../src/* ./build
-cp -R ../platforms/ibm/* ./build
+# # Copy files to build folder.
+# cp -R ../src/* ./build
+# cp -R ../platforms/ibm/* ./build
 
-cd ./build
-zip -X -r ./index.zip *
+# cd ./build
+# zip -X -r ./index.zip *
 
-cd ../../../
+# cd ../../../
 
 #
 # k nearest neighbors (knn)
@@ -147,9 +150,9 @@ zip -X -r ./index.zip *
 
 cd ../../../
 
-#
+# 
 # arithmetic-logic-unit (alu)
-#
+# 
 
 cd python_arithmetic_logic_unit/deploy
 
@@ -216,28 +219,28 @@ zip -X -r ./index.zip *
 
 cd ../../../
 
-#
-# dna-visualisation (dv)
-#
+# #
+# # dna-visualisation (dv)
+# #
 
-cd python_dna_visualization/deploy
+# cd python_dna_visualization/deploy
 
-# Destroy and prepare build folder.
-rm -rf build
-mkdir build
+# # Destroy and prepare build folder.
+# rm -rf build
+# mkdir build
 
-# Install virtualenv
-sudo docker run --rm -v "$PWD:/tmp" openwhisk/python3action bash \
-  -c "cd tmp && virtualenv virtualenv && source virtualenv/bin/activate && pip3 install -r requirements.txt"
+# # Install virtualenv
+# sudo docker run --rm -v "$PWD:/tmp" openwhisk/python3action bash \
+#   -c "cd tmp && virtualenv virtualenv && source virtualenv/bin/activate && pip3 install -r requirements.txt"
 
-# Copy files to build folder.
-cp -R ../src/* ./build
-cp -R ../platforms/ibm/* ./build
-cp -R virtualenv ./build
-cd ./build
-zip -X -r ./index.zip *
+# # Copy files to build folder.
+# cp -R ../src/* ./build
+# cp -R ../platforms/ibm/* ./build
+# cp -R virtualenv ./build
+# cd ./build
+# zip -X -r ./index.zip *
 
-cd ../../../
+# cd ../../../
 
 echo ""
 echo "Finish Compilation!"

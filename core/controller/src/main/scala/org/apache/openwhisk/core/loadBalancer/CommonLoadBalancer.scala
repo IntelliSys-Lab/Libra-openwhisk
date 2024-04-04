@@ -23,13 +23,12 @@ import java.util.concurrent.atomic.LongAdder
 
 import akka.actor.ActorSystem
 import akka.event.Logging.InfoLevel
-import akka.stream.ActorMaterializer
-import org.apache.kafka.clients.producer.RecordMetadata
 import pureconfig._
 import pureconfig.generic.auto._
 import org.apache.openwhisk.common.LoggingMarkers._
 import org.apache.openwhisk.common._
 import org.apache.openwhisk.core.connector._
+import org.apache.openwhisk.core.controller.Controller
 import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.{ConfigKeys, WhiskConfig}
@@ -44,9 +43,9 @@ import scala.util.{Failure, Success}
  */
 abstract class CommonLoadBalancer(config: WhiskConfig,
                                   feedFactory: FeedFactory,
-                                  controllerInstance: ControllerInstanceId)(implicit val actorSystem: ActorSystem,
+                                  controllerInstance: ControllerInstanceId)(implicit
+                                                                            val actorSystem: ActorSystem,
                                                                             logging: Logging,
-                                                                            materializer: ActorMaterializer,
                                                                             messagingProvider: MessagingProvider)
     extends LoadBalancer {
 
@@ -61,12 +60,11 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
   protected[loadBalancer] val activationPromises =
     TrieMap[ActivationId, Promise[Either[ActivationId, WhiskActivation]]]()
   protected val activationsPerNamespace = TrieMap[UUID, LongAdder]()
+  protected val activationsPerController = TrieMap[ControllerInstanceId, LongAdder]()
+  protected val activationsPerInvoker = TrieMap[InvokerInstanceId, LongAdder]()
   protected val totalActivations = new LongAdder()
   protected val totalBlackBoxActivationMemory = new LongAdder()
   protected val totalManagedActivationMemory = new LongAdder()
-
-  // Set up activation number record for each invoker
-  protected val activationsPerInvoker = TrieMap[Int, LongAdder]()
 
   protected def emitMetrics() = {
     MetricEmitter.emitGaugeMetric(LOADBALANCER_ACTIVATIONS_INFLIGHT(controllerInstance), totalActivations.longValue)
@@ -81,13 +79,22 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
       totalManagedActivationMemory.longValue)
   }
 
-  actorSystem.scheduler.schedule(10.seconds, 10.seconds)(emitMetrics())
+  actorSystem.scheduler.scheduleAtFixedRate(10.seconds, 10.seconds)(() => emitMetrics())
 
   override def activeActivationsFor(namespace: UUID): Future[Int] =
     Future.successful(activationsPerNamespace.get(namespace).map(_.intValue).getOrElse(0))
   override def totalActiveActivations: Future[Int] = Future.successful(totalActivations.intValue)
-  override def activeActivationsPerInvokerFor(invoker: Int): Future[Int] = 
-    Future.successful(activationsPerInvoker.get(invoker).map(_.intValue).getOrElse(0))
+  override def activeActivationsByController(controller: String): Future[Int] =
+    Future.successful(activationsPerController.get(ControllerInstanceId(controller)).map(_.intValue()).getOrElse(0))
+  override def activeActivationsByController: Future[List[(String, String)]] =
+    Future.successful(
+      activationSlots.values.map(entry => (entry.id.asString, entry.fullyQualifiedEntityName.toString)).toList)
+  override def activeActivationsByInvoker(invoker: String): Future[Int] =
+    Future.successful(
+      activationsPerInvoker.get(InvokerInstanceId(invoker.toInt, userMemory = 0.MB)).map(_.intValue()).getOrElse(0))
+  override def close: Unit = activationFeed ! GracefulShutdown
+
+
   /**
    * Calculate the duration within which a completion ack must be received for an activation.
    *
@@ -123,16 +130,16 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
 
     // Needed for emitting metrics.
     totalActivations.increment()
-
-    // Record activation number per invoker
-    activationsPerInvoker.getOrElseUpdate(instance.toInt, new LongAdder()).increment()
-
     val isBlackboxInvocation = action.exec.pull
     val totalActivationMemory =
       if (isBlackboxInvocation) totalBlackBoxActivationMemory else totalManagedActivationMemory
     totalActivationMemory.add(action.limits.memory.megabytes)
 
     activationsPerNamespace.getOrElseUpdate(msg.user.namespace.uuid, new LongAdder()).increment()
+    activationsPerController.getOrElseUpdate(controllerInstance, new LongAdder()).increment()
+    activationsPerInvoker
+      .getOrElseUpdate(InvokerInstanceId(instance.instance, userMemory = 0.MB), new LongAdder())
+      .increment()
 
     // Completion Ack must be received within the calculated time.
     val completionAckTimeout = calculateCompletionAckTimeout(action.limits.timeout.duration)
@@ -156,7 +163,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
     activationSlots.getOrElseUpdate(
       msg.activationId, {
         val timeoutHandler = actorSystem.scheduler.scheduleOnce(completionAckTimeout) {
-          processCompletion(msg.activationId, msg.transid, forced = true, isSystemError = false, invoker = instance)
+          processCompletion(msg.activationId, msg.transid, forced = true, isSystemError = false, instance = instance)
         }
 
         // please note: timeoutHandler.cancel must be called on all non-timeout paths, e.g. Success
@@ -170,7 +177,8 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
           action.fullyQualifiedName(true),
           timeoutHandler,
           isBlackboxInvocation,
-          msg.blocking)
+          msg.blocking,
+          controllerInstance)
       })
 
     resultPromise
@@ -182,10 +190,10 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
   /** 3. Send the activation to the invoker */
   protected def sendActivationToInvoker(producer: MessageProducer,
                                         msg: ActivationMessage,
-                                        invoker: InvokerInstanceId): Future[RecordMetadata] = {
+                                        invoker: InvokerInstanceId): Future[ResultMetadata] = {
     implicit val transid: TransactionId = msg.transid
 
-    val topic = s"invoker${invoker.toInt}"
+    val topic = s"${Controller.topicPrefix}invoker${invoker.toInt}"
 
     MetricEmitter.emitCounterMetric(LoggingMarkers.LOADBALANCER_ACTIVATION_START)
     val start = transid.started(
@@ -199,7 +207,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
         transid.finished(
           this,
           start,
-          s"posted to ${status.topic()}[${status.partition()}][${status.offset()}]",
+          s"posted to ${status.topic}[${status.partition}][${status.offset}]",
           logLevel = InfoLevel)
       case Failure(_) => transid.failed(this, start, s"error on posting to topic $topic")
     }
@@ -214,13 +222,13 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
     val raw = new String(bytes, StandardCharsets.UTF_8)
     AcknowledegmentMessage.parse(raw) match {
       case Success(acknowledegment) =>
-        acknowledegment.isSlotFree.foreach { invoker =>
+        acknowledegment.isSlotFree.foreach { instance =>
           processCompletion(
             acknowledegment.activationId,
             acknowledegment.transid,
             forced = false,
             isSystemError = acknowledegment.isSystemError.getOrElse(false),
-            invoker)
+            instance)
         }
 
         acknowledegment.result.foreach { response =>
@@ -269,7 +277,12 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
                                                 tid: TransactionId,
                                                 forced: Boolean,
                                                 isSystemError: Boolean,
-                                                invoker: InvokerInstanceId): Unit = {
+                                                instance: InstanceId): Unit = {
+
+    val invoker = instance match {
+      case i: InvokerInstanceId => Some(i)
+      case _                    => None
+    }
 
     val invocationResult = if (forced) {
       InvocationFinishedResult.Timeout
@@ -286,13 +299,16 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
     activationSlots.remove(aid) match {
       case Some(entry) =>
         totalActivations.decrement()
-        activationsPerInvoker.get(invoker.toInt).foreach(_.decrement())
         val totalActivationMemory =
           if (entry.isBlackbox) totalBlackBoxActivationMemory else totalManagedActivationMemory
         totalActivationMemory.add(entry.memoryLimit.toMB * (-1))
         activationsPerNamespace.get(entry.namespaceId).foreach(_.decrement())
+        activationsPerController.get(entry.controllerId).foreach(_.decrement())
+        activationsPerInvoker
+          .get(InvokerInstanceId(entry.invokerName.instance, userMemory = 0.MB))
+          .foreach(_.decrement())
 
-        releaseInvoker(invoker, entry)
+        invoker.foreach(releaseInvoker(_, entry))
 
         if (!forced) {
           entry.timeoutHandler.cancel()
@@ -314,7 +330,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
           val completionAckTimeout = calculateCompletionAckTimeout(entry.timeLimit)
           logging.warn(
             this,
-            s"forced completion ack for '$aid', action '${entry.fullyQualifiedEntityName}' ($actionType), $blockingType, mem limit ${entry.memoryLimit.toMB} MB, time limit ${entry.timeLimit.toMillis} ms, completion ack timeout $completionAckTimeout from $invoker")(
+            s"forced completion ack for '$aid', action '${entry.fullyQualifiedEntityName}' ($actionType), $blockingType, mem limit ${entry.memoryLimit.toMB} MB, time limit ${entry.timeLimit.toMillis} ms, completion ack timeout $completionAckTimeout from $instance")(
             tid)
 
           MetricEmitter.emitCounterMetric(LOADBALANCER_COMPLETION_ACK_FORCED)
@@ -323,17 +339,17 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
         // Completion acks that are received here are strictly from user actions - health actions are not part of
         // the load balancer's activation map. Inform the invoker pool supervisor of the user action completion.
         // guard this
-        invokerPool ! InvocationFinishedMessage(invoker, invocationResult)
+        invoker.foreach(invokerPool ! InvocationFinishedMessage(_, invocationResult))
       case None if tid == TransactionId.invokerHealth =>
         // Health actions do not have an ActivationEntry as they are written on the message bus directly. Their result
         // is important to pass to the invokerPool because they are used to determine if the invoker can be considered
         // healthy again.
-        logging.info(this, s"received completion ack for health action on $invoker")(tid)
+        logging.info(this, s"received completion ack for health action on $instance")(tid)
 
         MetricEmitter.emitCounterMetric(LOADBALANCER_COMPLETION_ACK_HEALTHCHECK)
 
         // guard this
-        invokerPool ! InvocationFinishedMessage(invoker, invocationResult)
+        invoker.foreach(invokerPool ! InvocationFinishedMessage(_, invocationResult))
       case None if !forced =>
         // Received a completion ack that has already been taken out of the state because of a timeout (forced ack).
         // The result is ignored because a timeout has already been reported to the invokerPool per the force.
@@ -341,7 +357,7 @@ abstract class CommonLoadBalancer(config: WhiskConfig,
         // message - but not in time.
         logging.warn(
           this,
-          s"received completion ack for '$aid' from $invoker which has no entry, system error=$isSystemError")(tid)
+          s"received completion ack for '$aid' from $instance which has no entry, system error=$isSystemError")(tid)
 
         MetricEmitter.emitCounterMetric(LOADBALANCER_COMPLETION_ACK_REGULAR_AFTER_FORCED)
       case None =>

@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-openwhisk_tmp_dir: "{{ lookup('env', 'OPENWHISK_TMP_DIR')|default('/tmp', true) }}"
+openwhisk_tmp_dir: "{{ lookup('env', 'OPENWHISK_TMP_DIR')|default('/tmp' if ansible_distribution == 'MacOSX' else '/var/tmp', true) }}"
 config_root_dir: "{{ openwhisk_tmp_dir }}/wskconf"
 whisk_logs_dir: "{{ openwhisk_tmp_dir }}/wsklogs"
 coverage_enabled: "{{ lookup('env', 'GRADLE_COVERAGE') | default('false', true) | bool}}"
@@ -24,6 +24,7 @@ docker_registry: ""
 docker_dns: ""
 runtimes_bypass_pull_for_local_images: true
 invoker_use_runc: "{{ ansible_distribution != 'MacOSX' }}"
+invoker_user_memory: 51200m
 
 db_prefix: whisk_local_
 
@@ -48,3 +49,4 @@ env_hosts_dir: "{{ playbook_dir }}/environments/local"
 container_pool_akka_client: true
 runtimes_enable_concurrency: true
 limit_action_concurrency_max: 500
+namespace_default_limit_action_concurrency_max: 500

@@ -6,7 +6,7 @@ import json
 import torch
 from torchvision import transforms
 from torchvision.models import resnet50
-from threading import Thread
+from threading import Thread, Event
 from queue import Queue
 
 from PIL import Image
@@ -41,11 +41,12 @@ def upload_stream_to_couchdb(db, doc_id, content, filename, content_type=None):
         pass
 
 def handler(event, context=None):
+    stop_signal = Event()
     q_cpu = Queue()
     q_mem = Queue()
     t = Thread(
         target=monitor_peak,
-        args=(interval, q_cpu, q_mem),
+        args=(interval, q_cpu, q_mem, stop_signal),
         daemon=True
     )
     t.start()

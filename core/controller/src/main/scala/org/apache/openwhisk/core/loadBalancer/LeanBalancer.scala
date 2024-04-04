@@ -18,12 +18,10 @@
 package org.apache.openwhisk.core.loadBalancer
 
 import akka.actor.{ActorRef, ActorSystem, Props}
-import akka.stream.ActorMaterializer
 import org.apache.openwhisk.common._
 import org.apache.openwhisk.core.WhiskConfig._
 import org.apache.openwhisk.core.connector._
 import org.apache.openwhisk.core.containerpool.ContainerPoolConfig
-import org.apache.openwhisk.core.entity.ControllerInstanceId
 import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.invoker.InvokerProvider
 import org.apache.openwhisk.core.{ConfigKeys, WhiskConfig}
@@ -46,20 +44,19 @@ class LeanBalancer(config: WhiskConfig,
                    controllerInstance: ControllerInstanceId,
                    implicit val messagingProvider: MessagingProvider = SpiLoader.get[MessagingProvider])(
   implicit actorSystem: ActorSystem,
-  logging: Logging,
-  materializer: ActorMaterializer)
+  logging: Logging)
     extends CommonLoadBalancer(config, feedFactory, controllerInstance) {
 
   /** Loadbalancer interface methods */
   override def invokerHealth(): Future[IndexedSeq[InvokerHealth]] = Future.successful(IndexedSeq.empty[InvokerHealth])
   override def clusterSize: Int = 1
 
-  // For code compatibility
-  override val schedulingState: ShardingContainerPoolBalancerState = null
-
   val poolConfig: ContainerPoolConfig = loadConfigOrThrow[ContainerPoolConfig](ConfigKeys.containerPool)
 
   val invokerName = InvokerInstanceId(0, None, None, poolConfig.userMemory)
+  
+  // For code compatibility
+  override val schedulingState: ShardingContainerPoolBalancerState = null
 
   /** 1. Publish a message to the loadbalancer */
   override def publish(action: ExecutableWhiskActionMetaData, msg: ActivationMessage)(
@@ -73,7 +70,8 @@ class LeanBalancer(config: WhiskConfig,
   /** Creates an invoker for executing user actions. There is only one invoker in the lean model. */
   private def makeALocalThreadedInvoker(): Unit = {
     implicit val ec = ExecutionContextFactory.makeCachedThreadPoolExecutionContext()
-    val limitConfig: ConcurrencyLimitConfig = loadConfigOrThrow[ConcurrencyLimitConfig](ConfigKeys.concurrencyLimit)
+    val limitConfig: IntraConcurrencyLimitConfig =
+      loadConfigOrThrow[IntraConcurrencyLimitConfig](ConfigKeys.concurrencyLimit)
     SpiLoader.get[InvokerProvider].instance(config, invokerName, messageProducer, poolConfig, limitConfig)
   }
 
@@ -92,10 +90,8 @@ class LeanBalancer(config: WhiskConfig,
 
 object LeanBalancer extends LoadBalancerProvider {
 
-  override def instance(whiskConfig: WhiskConfig, instance: ControllerInstanceId)(
-    implicit actorSystem: ActorSystem,
-    logging: Logging,
-    materializer: ActorMaterializer): LoadBalancer = {
+  override def instance(whiskConfig: WhiskConfig, instance: ControllerInstanceId)(implicit actorSystem: ActorSystem,
+                                                                                  logging: Logging): LoadBalancer = {
 
     new LeanBalancer(whiskConfig, createFeedFactory(whiskConfig, instance), instance)
   }

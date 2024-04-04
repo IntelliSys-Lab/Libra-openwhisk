@@ -43,8 +43,8 @@ import org.apache.openwhisk.core.entity.{
   ActivationEntityLimit,
   ActivationResponse,
   ByteSize,
-  ConcurrencyLimit,
   Exec,
+  IntraConcurrencyLimit,
   LogLimit,
   MemoryLimit,
   TimeLimit
@@ -75,7 +75,9 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
   // * With the introduction of Node.js 10, this was changed from "openFileLimit - 15" to
   //   "openFileLimit - 20".
   // * With Docker 18.09.3, we observed test failures and changed to "openFileLimit - 24".
-  val minExpectedOpenFiles = openFileLimit - 24
+  // * With the introduction of Node.js 20, this was changed from "openFileLimit - 24" to
+  //   "openFileLimit - 30".
+  val minExpectedOpenFiles = openFileLimit - 30
 
   behavior of "Action limits"
 
@@ -125,13 +127,13 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
       case Some(l)                               => s"${l} (allowed)"
     }
     val toConcurrencyString = concurrency match {
-      case None                                             => "None"
-      case Some(ConcurrencyLimit.MIN_CONCURRENT)            => s"${ConcurrencyLimit.MIN_CONCURRENT} (= min)"
-      case Some(ConcurrencyLimit.STD_CONCURRENT)            => s"${ConcurrencyLimit.STD_CONCURRENT} (= std)"
-      case Some(ConcurrencyLimit.MAX_CONCURRENT)            => s"${ConcurrencyLimit.MAX_CONCURRENT} (= max)"
-      case Some(c) if (c < ConcurrencyLimit.MIN_CONCURRENT) => s"${c} (< min)"
-      case Some(c) if (c > ConcurrencyLimit.MAX_CONCURRENT) => s"${c} (> max)"
-      case Some(c)                                          => s"${c} (allowed)"
+      case None                                                  => "None"
+      case Some(IntraConcurrencyLimit.MIN_CONCURRENT)            => s"${IntraConcurrencyLimit.MIN_CONCURRENT} (= min)"
+      case Some(IntraConcurrencyLimit.STD_CONCURRENT)            => s"${IntraConcurrencyLimit.STD_CONCURRENT} (= std)"
+      case Some(IntraConcurrencyLimit.MAX_CONCURRENT)            => s"${IntraConcurrencyLimit.MAX_CONCURRENT} (= max)"
+      case Some(c) if (c < IntraConcurrencyLimit.MIN_CONCURRENT) => s"${c} (< min)"
+      case Some(c) if (c > IntraConcurrencyLimit.MAX_CONCURRENT) => s"${c} (> max)"
+      case Some(c)                                               => s"${c} (allowed)"
     }
     val toExpectedResultString: String = if (ec == SUCCESS_EXIT) "allow" else "reject"
   }
@@ -143,10 +145,10 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
       time <- Seq(None, Some(TimeLimit.MIN_DURATION), Some(TimeLimit.MAX_DURATION))
       mem <- Seq(None, Some(MemoryLimit.MIN_MEMORY), Some(MemoryLimit.MAX_MEMORY))
       log <- Seq(None, Some(LogLimit.MIN_LOGSIZE), Some(LogLimit.MAX_LOGSIZE))
-      concurrency <- if (!concurrencyEnabled || (ConcurrencyLimit.MIN_CONCURRENT == ConcurrencyLimit.MAX_CONCURRENT)) {
-        Seq(None, Some(ConcurrencyLimit.MIN_CONCURRENT))
+      concurrency <- if (!concurrencyEnabled || (IntraConcurrencyLimit.MIN_CONCURRENT == IntraConcurrencyLimit.MAX_CONCURRENT)) {
+        Seq(None, Some(IntraConcurrencyLimit.MIN_CONCURRENT))
       } else {
-        Seq(None, Some(ConcurrencyLimit.MIN_CONCURRENT), Some(ConcurrencyLimit.MAX_CONCURRENT))
+        Seq(None, Some(IntraConcurrencyLimit.MIN_CONCURRENT), Some(IntraConcurrencyLimit.MAX_CONCURRENT))
       }
     } yield PermutationTestParameter(time, mem, log, concurrency)
   } ++
@@ -181,7 +183,7 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
         "timeout" -> parm.timeout.getOrElse(TimeLimit.STD_DURATION).toMillis.toJson,
         "memory" -> parm.memory.getOrElse(MemoryLimit.STD_MEMORY).toMB.toInt.toJson,
         "logs" -> parm.logs.getOrElse(LogLimit.STD_LOGSIZE).toMB.toInt.toJson,
-        "concurrency" -> parm.concurrency.getOrElse(ConcurrencyLimit.STD_CONCURRENT).toJson)
+        "concurrency" -> parm.concurrency.getOrElse(IntraConcurrencyLimit.STD_CONCURRENT).toJson)
 
       val name = "ActionLimitTests-" + Instant.now.toEpochMilli
       val createResult = assetHelper.withCleaner(wsk.action, name, confirmDelete = (parm.ec == SUCCESS_EXIT)) {
@@ -225,7 +227,7 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
       withActivation(wsk.activation, run) { result =>
         withClue("Activation result not as expected:") {
           result.response.status shouldBe ActivationResponse.messageForCode(ActivationResponse.DeveloperError)
-          result.response.result.get.fields("error") shouldBe {
+          result.response.result.get.asJsObject.fields("error") shouldBe {
             Messages.timedoutActivation(allowedActionDuration, init = false).toJson
           }
           result.duration.toInt should be >= allowedActionDuration.toMillis.toInt
@@ -314,7 +316,7 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
         val response = activation.response
         response.success shouldBe false
         response.status shouldBe ActivationResponse.messageForCode(ActivationResponse.ApplicationError)
-        val msg = response.result.get.fields(ActivationResponse.ERROR_FIELD).convertTo[String]
+        val msg = response.result.get.asJsObject.fields(ActivationResponse.ERROR_FIELD).convertTo[String]
         val expected = Messages.truncatedResponse((allowedSize + 10).B, allowedSize.B)
         withClue(s"is: ${msg.take(expected.length)}\nexpected: $expected") {
           msg.startsWith(expected) shouldBe true
@@ -404,7 +406,7 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
     withActivation(wsk.activation, run) { activation =>
       activation.response.success shouldBe false
 
-      val error = activation.response.result.get.fields("error").asJsObject
+      val error = activation.response.result.get.asJsObject.fields("error").asJsObject
       error.fields("filesToOpen") shouldBe (openFileLimit + 1).toJson
 
       error.fields("message") shouldBe {
@@ -435,7 +437,7 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
     }
 
     for (a <- 1 to 10) {
-      val run = wsk.action.invoke(name, Map("payload" -> "128".toJson))
+      val run = wsk.action.invoke(name, Map("payload" -> "128".toJson), blocking = true)
       withActivation(wsk.activation, run) { response =>
         response.response.status shouldBe "success"
         response.response.result shouldBe Some(JsObject("msg" -> "OK, buffer of size 128 MB has been filled.".toJson))
@@ -471,7 +473,7 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
     val payload = MemoryLimit.MIN_MEMORY.toMB * 2
     val run = wsk.action.invoke(name, Map("payload" -> payload.toJson))
     withActivation(wsk.activation, run) {
-      _.response.result.get.fields("error") shouldBe Messages.memoryExhausted.toJson
+      _.response.result.get.asJsObject.fields("error") shouldBe Messages.memoryExhausted.toJson
     }
   }
 
@@ -494,7 +496,7 @@ class ActionLimitsTests extends TestHelpers with WskTestHelpers with WskActorSys
       withActivation(wsk.activation, run) { result =>
         withClue("Activation result not as expected:") {
           result.response.status shouldBe ActivationResponse.messageForCode(ActivationResponse.DeveloperError)
-          result.response.result.get
+          result.response.result.get.asJsObject
             .fields("error") shouldBe Messages.timedoutActivation(allowedActionDuration, init = false).toJson
           val logs = result.logs.get
           logs.last should include(Messages.logWarningDeveloperError)

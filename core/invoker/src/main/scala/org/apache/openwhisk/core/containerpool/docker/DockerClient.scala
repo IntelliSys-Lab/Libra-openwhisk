@@ -34,13 +34,13 @@ import scala.util.Try
 import akka.event.Logging.{ErrorLevel, InfoLevel}
 import pureconfig._
 import pureconfig.generic.auto._
-import org.apache.openwhisk.common.{Logging, LoggingMarkers, MetricEmitter, TransactionId}
+import org.apache.openwhisk.common.{Logging, LoggingMarkers, TransactionId}
 import org.apache.openwhisk.core.ConfigKeys
-import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.containerpool.ContainerId
 import org.apache.openwhisk.core.containerpool.ContainerAddress
 
 import scala.concurrent.duration.Duration
+import org.apache.openwhisk.core.entity.ByteSize
 
 object DockerContainerId {
 
@@ -70,7 +70,7 @@ case class DockerClientTimeoutConfig(run: Duration,
 /**
  * Configuration for docker client
  */
-case class DockerClientConfig(parallelRuns: Int, timeouts: DockerClientTimeoutConfig)
+case class DockerClientConfig(parallelRuns: Int, timeouts: DockerClientTimeoutConfig, maskDockerRunArgs: Boolean)
 
 /**
  * Serves as interface to the docker CLI tool.
@@ -137,7 +137,10 @@ class DockerClient(dockerHost: Option[String] = None,
       }
     }.flatMap { _ =>
       // Iff the semaphore was acquired successfully
-      runCmd(Seq("run", "-d") ++ args ++ Seq(image), config.timeouts.run)
+      runCmd(
+        Seq("run", "-d") ++ args ++ Seq(image),
+        config.timeouts.run,
+        if (config.maskDockerRunArgs) Some(Seq("run", "-d", "**ARGUMENTS HIDDEN**", image)) else None)
         .andThen {
           // Release the semaphore as quick as possible regardless of the runCmd() result
           case _ => runSemaphore.release()
@@ -149,11 +152,15 @@ class DockerClient(dockerHost: Option[String] = None,
           // Examples:
           // - Unrecognized option specified
           // - Not enough disk space
-          case pre: ProcessUnsuccessfulException if pre.exitStatus == ExitStatus(125) =>
+          // Exit status 127 means an error that container command cannot be found.
+          // Examples:
+          // - executable file not found in $PATH": unknown
+          case pre: ProcessUnsuccessfulException
+              if pre.exitStatus == ExitStatus(125) || pre.exitStatus == ExitStatus(127) =>
             Future.failed(
               DockerContainerId
                 .parse(pre.stdout)
-                .map(BrokenDockerContainer(_, s"Broken container: ${pre.getMessage}"))
+                .map(BrokenDockerContainer(_, s"Broken container: ${pre.getMessage}", Some(pre.exitStatus.statusValue)))
                 .getOrElse(pre))
         }
     }
@@ -179,17 +186,17 @@ class DockerClient(dockerHost: Option[String] = None,
   def update(id: ContainerId, cpuShares: Int, memory: ByteSize)(implicit transid: TransactionId): Future[Unit] = {
     var cmd = Seq(
       "update",
-      // "--cpu-share", 
-      "--cpus", 
+      // "--cpu-share",
+      "--cpus",
       cpuShares.toString,
-      "--memory", 
+      "--memory",
       s"${memory.toMB}m",
       "--memory-swap",
       s"${memory.toMB}m",
       id.asString
     )
     runCmd(cmd, config.timeouts.update).map(_ => ())
-  } 
+  }
 
   def ps(filters: Seq[(String, String)] = Seq.empty, all: Boolean = false)(
     implicit transid: TransactionId): Future[Seq[ContainerId]] = {
@@ -213,18 +220,18 @@ class DockerClient(dockerHost: Option[String] = None,
   def isOomKilled(id: ContainerId)(implicit transid: TransactionId): Future[Boolean] =
     runCmd(Seq("inspect", id.asString, "--format", "{{.State.OOMKilled}}"), config.timeouts.inspect).map(_.toBoolean)
 
-  protected def runCmd(args: Seq[String], timeout: Duration)(implicit transid: TransactionId): Future[String] = {
+  protected def runCmd(args: Seq[String], timeout: Duration, maskedArgs: Option[Seq[String]] = None)(
+    implicit transid: TransactionId): Future[String] = {
     val cmd = dockerCmd ++ args
     val start = transid.started(
       this,
       LoggingMarkers.INVOKER_DOCKER_CMD(args.head),
-      s"running ${cmd.mkString(" ")} (timeout: $timeout)",
+      s"running ${maskedArgs.map(maskedArgs => (dockerCmd ++ maskedArgs).mkString(" ")).getOrElse(cmd.mkString(" "))} (timeout: $timeout)",
       logLevel = InfoLevel)
     executeProcess(cmd, timeout).andThen {
       case Success(_) => transid.finished(this, start)
       case Failure(pte: ProcessTimeoutException) =>
         transid.failed(this, start, pte.getMessage, ErrorLevel)
-        MetricEmitter.emitCounterMetric(LoggingMarkers.INVOKER_DOCKER_CMD_TIMEOUT(args.head))
       case Failure(t) => transid.failed(this, start, t.getMessage, ErrorLevel)
     }
   }
@@ -324,4 +331,4 @@ trait DockerApi {
 }
 
 /** Indicates any error while starting a container that leaves a broken container behind that needs to be removed */
-case class BrokenDockerContainer(id: ContainerId, msg: String) extends Exception(msg)
+case class BrokenDockerContainer(id: ContainerId, msg: String, existStatus: Option[Int] = None) extends Exception(msg)

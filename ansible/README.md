@@ -25,17 +25,17 @@ Deploying OpenWhisk using Ansible
 If you want to deploy OpenWhisk locally using Ansible, you first need to install Ansible on your development environment:
 
 #### Ubuntu users
-```
+```shell script
 sudo apt-get install python-pip
-sudo pip install ansible==2.5.2
-sudo pip install jinja2==2.9.6
+sudo pip install ansible==4.1.0
+sudo pip install jinja2==3.0.1
 ```
 
 #### Docker for Mac users
-```
+```shell script
 sudo easy_install pip
-sudo pip install ansible==2.5.2
-pip install jinja2==2.9.6
+sudo pip install ansible==4.1.0
+pip install jinja2==3.0.1
 ```
 Docker for Mac does not provide any official ways to meet some requirements for OpenWhisk.
 You need to depend on the workarounds until Docker provides official methods.
@@ -45,13 +45,13 @@ If you prefer [Docker-machine](https://docs.docker.com/machine/) to [Docker for 
 ##### Enable Docker remote API
 The remote Docker API is required for collecting logs using the Ansible playbook [logs.yml](logs.yml).
 
-##### Activate docker0 network
-This is an optional step for local deployment.
+##### Activate docker0 network (local dev only)
+
 The OpenWhisk deployment via Ansible uses the `docker0` network interface to deploy OpenWhisk and it does not exist on Docker for Mac environment.
 
 An expedient workaround is to add alias for `docker0` network to loopback interface.
 
-```
+```shell script
 sudo ifconfig lo0 alias 172.17.0.1/24
 ```
 
@@ -59,11 +59,26 @@ sudo ifconfig lo0 alias 172.17.0.1/24
 **Caveat:** All Ansible commands are meant to be executed from the `ansible` directory.
 This is important because that's where `ansible.cfg` is located which contains generic settings that are needed for the remaining steps.
 
-In all instructions, replace `<environment>` with your target environment. The default environment is `local` which works for Ubuntu and
+Set the environment for the commands below by running
+```shell script
+ENVIRONMENT=local  # or docker-machine or jenkins or vagrant
+```
+
+The default environment is `local` which works for Ubuntu and
 Docker for Mac. To use the default environment, you may omit the `-i` parameter entirely. For older Mac installation using Docker Machine,
 use `-i environments/docker-machine`.
 
 In all instructions, replace `<openwhisk_home>` with the base directory of your OpenWhisk source tree. e.g. `openwhisk`
+
+#### Ansible with pyenv (local dev only)
+
+When using [pyenv](https://github.com/pyenv/pyenv) to manage your versions of python, the [ansible python interpreter](https://docs.ansible.com/ansible/latest/reference_appendices/python_3_support.html) will use your system's default python, which may have a different version.
+
+To make sure ansible uses the same version of python which you configured, execute:
+
+```bash
+echo -e "\nansible_python_interpreter: `which python`\n" >> ./environments/local/group_vars/all
+```
 
 #### Preserving configuration and log directories on reboot
 When using the local Ansible environment, configuration and log data is stored in `/tmp` by default. However, operating
@@ -73,8 +88,10 @@ directory before deploying OpenWhisk.
 
 #### Setup
 
-The following step must be executed once per development environment.
+This step should be executed once per development environment.
 It will generate the `hosts` configuration file based on your environment settings.
+
+> This file is generated automatically for an ephemeral CouchDB instance during `setup.yml`.
 
 The default configuration does not run multiple instances of core components (e.g., controller, invoker, kafka).
 You may elect to enable high-availability (HA) mode by passing tne Ansible option `-e mode=HA` when executing this playbook.
@@ -83,7 +100,7 @@ This will configure your deployment with multiple instances (e.g., two Kafka ins
 In addition to the host file generation, you need to configure the database for your deployment. This is done
 by modifying the file `ansible/db_local.ini` to provide the following properties.
 
-```bash
+```
 [db_creds]
 db_provider=
 db_username=
@@ -93,10 +110,9 @@ db_host=
 db_port=
 ```
 
-This file is generated automatically for an ephemeral CouchDB instance during `setup.yml`. If you want to use Cloudant, you have to modify the file.
 For convenience, you can use shell environment variables that are read by the playbook to generate the required `db_local.ini` file as shown below.
 
-```
+```shell script
 export OW_DB=CouchDB
 export OW_DB_USERNAME=<your couchdb user>
 export OW_DB_PASSWORD=<your couchdb password>
@@ -104,12 +120,12 @@ export OW_DB_PROTOCOL=<your couchdb protocol>
 export OW_DB_HOST=<your couchdb host>
 export OW_DB_PORT=<your couchdb port>
 
-ansible-playbook -i environments/<environment> setup.yml
+ansible-playbook -i environments/$ENVIRONMENT setup.yml
 ```
 
-Alternatively, if you want to use Cloudant as your datastore:
+##### Use Cloudant as a datastore
 
-```
+```shell script
 export OW_DB=Cloudant
 export OW_DB_USERNAME=<your cloudant user>
 export OW_DB_PASSWORD=<your cloudant password>
@@ -117,45 +133,117 @@ export OW_DB_PROTOCOL=https
 export OW_DB_HOST=<your cloudant user>.cloudant.com
 export OW_DB_PORT=443
 
-ansible-playbook -i environments/<environment> setup.yml
+ansible-playbook -i environments/$ENVIRONMENT setup.yml
 ```
 
 #### Install Prerequisites
-This step is not required for local environments since all prerequisites are already installed, and therefore may be skipped.`
+
+> This step is not required for local environments since all prerequisites are already installed, and therefore may be skipped.
 
 This step needs to be done only once per target environment. It will install necessary prerequisites on all target hosts in the environment.
 
 ```
-ansible-playbook -i environments/<environment> prereq.yml
+ansible-playbook -i environments/$ENVIRONMENT prereq.yml
 ```
 
 **Hint:** During playbook execution the `TASK [prereq : check for pip]` can show as failed. This is normal if no pip is installed. The playbook will then move on and install pip on the target machines.
 
+### [Optional] Enable the new scheduler
+
+You can enable the new scheduler of OpenWhisk.
+It will run one more component called "scheduler" and ETCD.
+
+#### Configure service providers for the scheduler
+You can update service providers for the scheduler as follows.
+
+**common/scala/src/main/resources/reference.conf**
+
+If you are using ElasticSearch (recommended) then replace ```NoopDurationCheckerProvider``` with ```ElasticSearchDurationCheckerProvider``` below.
+```
+whisk.spi {
+  ArtifactStoreProvider = org.apache.openwhisk.core.database.CouchDbStoreProvider
+  ActivationStoreProvider = org.apache.openwhisk.core.database.ArtifactActivationStoreProvider
+  MessagingProvider = org.apache.openwhisk.connector.kafka.KafkaMessagingProvider
+  ContainerFactoryProvider = org.apache.openwhisk.core.containerpool.docker.DockerContainerFactoryProvider
+  LogStoreProvider = org.apache.openwhisk.core.containerpool.logging.DockerToActivationLogStoreProvider
+  LoadBalancerProvider = org.apache.openwhisk.core.loadBalancer.FPCPoolBalancer
+  EntitlementSpiProvider = org.apache.openwhisk.core.entitlement.FPCEntitlementProvider
+  AuthenticationDirectiveProvider = org.apache.openwhisk.core.controller.BasicAuthenticationDirective
+  InvokerProvider = org.apache.openwhisk.core.invoker.FPCInvokerReactive
+  InvokerServerProvider = org.apache.openwhisk.core.invoker.FPCInvokerServer
+  DurationCheckerProvider = org.apache.openwhisk.core.scheduler.queue.NoopDurationCheckerProvider
+}
+.
+.
+.
+```
+#### Configure pause grace for the scheduler
+Set the value of pause-grace to 10s by default
+
+**core/invoker/src/main/resources/application.conf**
+```
+  container-proxy {
+    timeouts {
+      # The "unusedTimeout" in the ContainerProxy,
+      #aka 'How long should a container sit idle until we kill it?'
+      idle-container = 10 minutes
+      pause-grace = 10 seconds
+      keeping-duration = 10 minutes
+    }
+  .
+  .
+  .
+```
+
+#### Enable the scheduler
+- Make sure you enable the scheduler by configuring `scheduler_enable`.
+
+**ansible/environments/local/group_vars/all**
+```yaml
+scheduler_enable: true
+```
+
+#### [Optional] Enable ElasticSearch Activation Store
+When you use the new scheduler, it is recommended to use ElasticSearch as an activation store.
+
+**ansible/environments/local/group_vars**
+```yaml
+db_activation_backend: ElasticSearch
+elastic_cluster_name: <your elasticsearch cluster name>
+elastic_protocol: <your elasticsearch protocol>
+elastic_index_pattern: <your elasticsearch index pattern>
+elastic_base_volume: <your elasticsearch volume directory>
+elastic_username: <your elasticsearch username>
+elastic_password: <your elasticsearch username>
+```
+
+You can also refer to this guide to [deploy OpenWhisk using ElasticSearch](https://github.com/apache/openwhisk/blob/master/ansible/README.md#using-elasticsearch-to-store-activations).
+
 ### Deploying Using CouchDB
 -   Make sure your `db_local.ini` file is [setup for](#setup) CouchDB then execute:
 
-```
+```shell script
 cd <openwhisk_home>
 ./gradlew distDocker
 cd ansible
-ansible-playbook -i environments/<environment> couchdb.yml
-ansible-playbook -i environments/<environment> initdb.yml
-ansible-playbook -i environments/<environment> wipe.yml
-ansible-playbook -i environments/<environment> openwhisk.yml
+ansible-playbook -i environments/$ENVIRONMENT couchdb.yml
+ansible-playbook -i environments/$ENVIRONMENT initdb.yml
+ansible-playbook -i environments/$ENVIRONMENT wipe.yml
+ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml
 
 # installs a catalog of public packages and actions
-ansible-playbook -i environments/<environment> postdeploy.yml
+ansible-playbook -i environments/$ENVIRONMENT postdeploy.yml
 
 # to use the API gateway
-ansible-playbook -i environments/<environment> apigateway.yml
-ansible-playbook -i environments/<environment> routemgmt.yml
+ansible-playbook -i environments/$ENVIRONMENT apigateway.yml
+ansible-playbook -i environments/$ENVIRONMENT routemgmt.yml
 ```
 
 - You need to run `initdb.yml` **every time** you do a fresh deploy CouchDB to initialize the subjects database.
 - The `wipe.yml` playbook should be run on a fresh deployment only, otherwise actions and activations will be lost.
 - Run `postdeploy.yml` after deployment to install a catalog of useful packages.
 - To use the API Gateway, you'll need to run `apigateway.yml` and `routemgmt.yml`.
-- Use `ansible-playbook -i environments/<environment> openwhisk.yml` to avoid wiping the data store. This is useful to start OpenWhisk after restarting your Operating System.
+- Use `ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml` to avoid wiping the data store. This is useful to start OpenWhisk after restarting your Operating System.
 
 #### Limitation
 
@@ -167,14 +255,50 @@ To deploy multiple CouchDB nodes, they should be placed on different machines re
 -   Make sure your `db_local.ini` file is set up for Cloudant. See [Setup](#setup).
 -   Then execute:
 
+```shell script
+cd <openwhisk_home>
+./gradlew distDocker
+cd ansible
+ansible-playbook -i environments/$ENVIRONMENT initdb.yml
+ansible-playbook -i environments/$ENVIRONMENT wipe.yml
+ansible-playbook -i environments/$ENVIRONMENT apigateway.yml
+ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml
+
+# installs a catalog of public packages and actions
+ansible-playbook -i environments/$ENVIRONMENT postdeploy.yml
+
+# to use the API gateway
+ansible-playbook -i environments/$ENVIRONMENT apigateway.yml
+ansible-playbook -i environments/$ENVIRONMENT routemgmt.yml
+```
+
+- You need to run `initdb` on Cloudant **only once** per Cloudant database to initialize the subjects database.
+- The `initdb.yml` playbook will only initialize your database if it is not initialized already, else it will skip initialization steps.
+- The `wipe.yml` playbook should be run on a fresh deployment only, otherwise actions and activations will be lost.
+- Run `postdeploy.yml` after deployment to install a catalog of useful packages.
+- To use the API Gateway, you'll need to run `apigateway.yml` and `routemgmt.yml`.
+- Use `ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml` to avoid wiping the data store. This is useful to start OpenWhisk after restarting your Operating System.
+
+### Deploying Using MongoDB
+
+You can choose MongoDB instead of CouchDB as the database backend to store entities.
+
+- Deploy a mongodb server(Optional, for test and develop only, use an external MongoDB server in production).
+  You need to execute `pip install pymongo` first
+
+```
+ansible-playbook -i environments/<environment> mongodb.yml -e mongodb_data_volume="/tmp/mongo-data"
+```
+
+- Then execute
+
 ```
 cd <openwhisk_home>
 ./gradlew distDocker
 cd ansible
-ansible-playbook -i environments/<environment> initdb.yml
-ansible-playbook -i environments/<environment> wipe.yml
-ansible-playbook -i environments/<environment> apigateway.yml
-ansible-playbook -i environments/<environment> openwhisk.yml
+ansible-playbook -i environments/<environment> initMongodb.yml -e mongodb_connect_string="mongodb://172.17.0.1:27017"
+ansible-playbook -i environments/<environment> apigateway.yml -e mongodb_connect_string="mongodb://172.17.0.1:27017"
+ansible-playbook -i environments/<environment> openwhisk.yml -e mongodb_connect_string="mongodb://172.17.0.1:27017" -e db_artifact_backend="MongoDB"
 
 # installs a catalog of public packages and actions
 ansible-playbook -i environments/<environment> postdeploy.yml
@@ -184,12 +308,13 @@ ansible-playbook -i environments/<environment> apigateway.yml
 ansible-playbook -i environments/<environment> routemgmt.yml
 ```
 
-- You need to run `initdb` on Cloudant **only once** per Cloudant database to initialize the subjects database.
-- The `initdb.yml` playbook will only initialize your database if it is not initialized already, else it will skip initialization steps.
-- The `wipe.yml` playbook should be run on a fresh deployment only, otherwise actions and activations will be lost.
-- Run `postdeploy.yml` after deployment to install a catalog of useful packages.
-- To use the API Gateway, you'll need to run `apigateway.yml` and `routemgmt.yml`.
-- Use `ansible-playbook -i environments/<environment> openwhisk.yml` to avoid wiping the data store. This is useful to start OpenWhisk after restarting your Operating System.
+Available parameters for ansible are
+```
+  mongodb:
+    connect_string: "{{ mongodb_connect_string }}"
+    database: "{{ mongodb_database | default('whisks') }}"
+    data_volume: "{{ mongodb_data_volume | default('mongo-data') }}"
+```
 
 ### Using ElasticSearch to Store Activations
 
@@ -211,24 +336,24 @@ elasticsearch_connect_string="x.x.x.x:9200,y.y.y.y:9200" // if you want to use a
 
 -  Then execute:
 
-```
+```shell script
 cd <openwhisk_home>
 ./gradlew distDocker
 cd ansible
 # couchdb is still needed to store subjects and actions
-ansible-playbook -i environments/<environment> couchdb.yml
-ansible-playbook -i environments/<environment> initdb.yml
-ansible-playbook -i environments/<environment> wipe.yml
+ansible-playbook -i environments/$ENVIRONMENT couchdb.yml
+ansible-playbook -i environments/$ENVIRONMENT initdb.yml
+ansible-playbook -i environments/$ENVIRONMENT wipe.yml
 # this will deploy a simple ES cluster, you can skip this to use external ES cluster
-ansible-playbook -i environments/<environment> elasticsearch.yml
-ansible-playbook -i environments/<environment> openwhisk.yml -e db_activation_backend=ElasticSearch
+ansible-playbook -i environments/$ENVIRONMENT elasticsearch.yml
+ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml -e db_activation_backend=ElasticSearch
 
 # installs a catalog of public packages and actions
-ansible-playbook -i environments/<environment> postdeploy.yml
+ansible-playbook -i environments/$ENVIRONMENT postdeploy.yml
 
 # to use the API gateway
-ansible-playbook -i environments/<environment> apigateway.yml
-ansible-playbook -i environments/<environment> routemgmt.yml
+ansible-playbook -i environments/$ENVIRONMENT apigateway.yml
+ansible-playbook -i environments/$ENVIRONMENT routemgmt.yml
 ```
 
 ### Configuring the installation of `wsk` CLI
@@ -249,7 +374,7 @@ Let's assume your OpenWhisk CLI home directory is
 the CLI repository, use the gradle command to build the binaries (you can omit
 the `-PnativeBuild` if you want to cross-compile for all supported platforms):
 
-```
+```shell script
 cd "$OPENWHISK_HOME/../openwhisk-cli"
 ./gradlew releaseBinaries -PnativeBuild
 ```
@@ -258,7 +383,7 @@ The binaries are generated and put into a tarball in the folder
 `../openwhisk-cli/release`.  Then, use the following Ansible command
 to (re-)configure the CLI installation:
 
-```
+```shell script
 export OPENWHISK_ENVIRONMENT=local  # ... or whatever
 ansible-playbook -i environments/$OPENWHISK_ENVIRONMENT edge.yml -e mode=clean
 ansible-playbook -i environments/$OPENWHISK_ENVIRONMENT edge.yml \
@@ -276,15 +401,15 @@ Once the CLI is installed, you can [use it to work with Whisk](../docs/cli.md).
 ### Hot-swapping a Single Component
 The playbook structure allows you to clean, deploy or re-deploy a single component as well as the entire OpenWhisk stack. Let's assume you have deployed the entire stack using the `openwhisk.yml` playbook. You then make a change to a single component, for example the invoker. You will probably want a new tag on the invoker image so you first build it using:
 
-```
+```shell script
 cd <openwhisk_home>
-gradle :core:invoker:distDocker -PdockerImageTag=myNewInvoker
+./gradlew :core:invoker:distDocker -PdockerImageTag=myNewInvoker
 ```
 Then all you need to do is re-deploy the invoker using the new image:
 
-```
+```shell script
 cd ansible
-ansible-playbook -i environments/<environment> invoker.yml -e docker_image_tag=myNewInvoker
+ansible-playbook -i environments/$ENVIRONMENT invoker.yml -e docker_image_tag=myNewInvoker
 ```
 
 **Hint:** You can omit the Docker image tag parameters in which case `latest` will be used implicitly.
@@ -293,9 +418,9 @@ ansible-playbook -i environments/<environment> invoker.yml -e docker_image_tag=m
 You can remove a single component just as you would remove the entire deployment stack.
 For example, if you wanted to remove only the controller you would run:
 
-```
+```shell script
 cd ansible
-ansible-playbook -i environments/<environment> controller.yml -e mode=clean
+ansible-playbook -i environments/$ENVIRONMENT controller.yml -e mode=clean
 ```
 
 **Caveat:** In distributed environments some components (e.g. Invoker, etc.) exist on multiple machines. So if you run a playbook to clean or deploy those components, it will run on **all** of the hosts targeted by the component's playbook.
@@ -304,27 +429,27 @@ ansible-playbook -i environments/<environment> controller.yml -e mode=clean
 ### Cleaning an OpenWhisk Deployment
 Once you are done with the deployment you can clean it from the target environment.
 
-```
-ansible-playbook -i environments/<environment> openwhisk.yml -e mode=clean
+```shell script
+ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml -e mode=clean
 ```
 
 ### Removing all prereqs from an environment
 This is usually not necessary, however in case you want to uninstall all prereqs from a target environment, execute:
 
-```
-ansible-playbook -i environments/<environment> prereq.yml -e mode=clean
+```shell script
+ansible-playbook -i environments/$ENVIRONMENT prereq.yml -e mode=clean
 ```
 
 ### Lean Setup
 To have a lean setup (no Kafka, Zookeeper and no Invokers as separate entities):
 
 At [Deploying Using CouchDB](ansible/README.md#deploying-using-cloudant) step, replace:
-```
-ansible-playbook -i environments/<environment> openwhisk.yml
+```shell script
+ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml
 ```
 by:
-```
-ansible-playbook -i environments/<environment> openwhisk.yml -e lean=true
+```shell script
+ansible-playbook -i environments/$ENVIRONMENT openwhisk.yml -e lean=true
 ```
 
 ### Troubleshooting
@@ -339,7 +464,7 @@ ERROR! Unexpected Exception: ... Requirement.parse('setuptools>=11.3'))
 
 your `setuptools` package is likely out of date. You can upgrade the package using this command:
 
-```
+```shell script
 pip install --upgrade setuptools --user python
 ```
 
@@ -362,13 +487,13 @@ ansible | FAILED! => {
 
 An expedient workaround is to create a link to the expected location:
 
-```
+```shell script
 ln -s $(which python) /usr/local/bin/python
 ```
 
 Alternatively, you can also configure the location of Python interpreter in `environments/<environment>/group_vars`.
 
-```
+```shell script
 ansible_python_interpreter: "/usr/local/bin/python"
 ```
 

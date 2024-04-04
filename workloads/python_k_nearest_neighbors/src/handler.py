@@ -7,7 +7,7 @@ import time
 import random
 from multiprocessing import Process, Pipe
 import operator
-from threading import Thread
+from threading import Thread, Event
 from queue import Queue
 
 import numpy as np
@@ -75,11 +75,12 @@ def knn(per_size, dataset_size, feature_dim, k, childConn, clientId):
     childConn.close()
 
 def handler(event, context=None):
+    stop_signal = Event()
     q_cpu = Queue()
     q_mem = Queue()
     t = Thread(
         target=monitor_peak,
-        args=(interval, q_cpu, q_mem),
+        args=(interval, q_cpu, q_mem, stop_signal),
         daemon=True
     )
     t.start()

@@ -17,7 +17,11 @@
 
 package org.apache.openwhisk.core.entity
 
-import spray.json.DefaultJsonProtocol
+import spray.json.{deserializationError, DefaultJsonProtocol, JsNumber, JsObject, JsString, JsValue, RootJsonFormat}
+import spray.json._
+
+import scala.collection.mutable.ListBuffer
+import scala.util.Try
 
 /**
  * An instance id representing an invoker
@@ -25,11 +29,18 @@ import spray.json.DefaultJsonProtocol
  * @param instance a numeric value used for the load balancing and Kafka topic creation
  * @param uniqueName an identifier required for dynamic instance assignment by Zookeeper
  * @param displayedName an identifier that is required for the health protocol to correlate Kafka topics with invoker container names
+ * @param userMemory invoker user memory
+ * @param busyMemory invoker busy memory
+ * @param tags actions which included specified annotation tags can be run on this invoker
+ * @param dedicatedNamespaces only dedicatedNamespaces's actions can be run on this invoker
  */
 case class InvokerInstanceId(val instance: Int,
                              uniqueName: Option[String] = None,
                              displayedName: Option[String] = None,
-                             val userMemory: ByteSize)
+                             val userMemory: ByteSize,
+                             val busyMemory: Option[ByteSize] = None,
+                             val tags: Seq[String] = Seq.empty[String],
+                             val dedicatedNamespaces: Seq[String] = Seq.empty)
     extends InstanceId {
   def toInt: Int = instance
 
@@ -38,6 +49,8 @@ case class InvokerInstanceId(val instance: Int,
   override val source = s"$instanceType$instance"
 
   override val toString: String = (Seq("invoker" + instance) ++ uniqueName ++ displayedName).mkString("/")
+
+  override val toJson: JsValue = InvokerInstanceId.serdes.write(this)
 }
 
 case class ControllerInstanceId(asString: String) extends InstanceId {
@@ -47,15 +60,93 @@ case class ControllerInstanceId(asString: String) extends InstanceId {
   override val source = s"$instanceType$asString"
 
   override val toString: String = source
+
+  override val toJson: JsValue = ControllerInstanceId.serdes.write(this)
+}
+
+case class SchedulerInstanceId(val asString: String) extends InstanceId {
+  validate(asString)
+  override val instanceType = "scheduler"
+
+  override val source = s"$instanceType$asString"
+
+  override val toString: String = source
+
+  override val toJson: JsValue = SchedulerInstanceId.serdes.write(this)
 }
 
 object InvokerInstanceId extends DefaultJsonProtocol {
-  import org.apache.openwhisk.core.entity.size.{serdes => xserds}
-  implicit val serdes = jsonFormat(InvokerInstanceId.apply, "instance", "uniqueName", "displayedName", "userMemory")
+  def parse(c: String): Try[InvokerInstanceId] = Try(serdes.read(c.parseJson))
+
+  implicit val serdes = new RootJsonFormat[InvokerInstanceId] {
+    override def write(i: InvokerInstanceId): JsValue = {
+      val fields = new ListBuffer[(String, JsValue)]
+      fields ++= List("instance" -> JsNumber(i.instance))
+      fields ++= List("userMemory" -> JsString(i.userMemory.toString))
+      i.busyMemory.foreach { busyMemory =>
+        fields ++= List("busyMemory" -> JsString(busyMemory.toString))
+      }
+      fields ++= List("instanceType" -> JsString(i.instanceType))
+      fields ++= List("tags" -> JsArray(i.tags.map(_.toJson): _*))
+      fields ++= List("dedicatedNamespaces" -> JsArray(i.dedicatedNamespaces.map(_.toJson): _*))
+      i.uniqueName.foreach(uniqueName => fields ++= List("uniqueName" -> JsString(uniqueName)))
+      i.displayedName.foreach(displayedName => fields ++= List("displayedName" -> JsString(displayedName)))
+      JsObject(fields.toSeq: _*)
+    }
+
+    override def read(json: JsValue): InvokerInstanceId = {
+      val instance = fromField[Int](json, "instance")
+      val uniqueName = fromField[Option[String]](json, "uniqueName")
+      val displayedName = fromField[Option[String]](json, "displayedName")
+      val userMemory = fromField[String](json, "userMemory")
+      val busyMemory = fromField[Option[String]](json, "busyMemory")
+      val instanceType = fromField[String](json, "instanceType")
+      val tags = fromField[Seq[String]](json, "tags")
+      val dedicatedNamespaces = fromField[Seq[String]](json, "dedicatedNamespaces")
+
+      if (instanceType == "invoker") {
+        new InvokerInstanceId(
+          instance,
+          uniqueName,
+          displayedName,
+          ByteSize.fromString(userMemory),
+          busyMemory.map(ByteSize.fromString(_)),
+          tags,
+          dedicatedNamespaces)
+      } else {
+        deserializationError("could not read InvokerInstanceId")
+      }
+    }
+  }
+
 }
 
 object ControllerInstanceId extends DefaultJsonProtocol {
-  implicit val serdes = jsonFormat(ControllerInstanceId.apply _, "asString")
+  def parse(c: String): Try[ControllerInstanceId] = Try(serdes.read(c.parseJson))
+
+  implicit val serdes = new RootJsonFormat[ControllerInstanceId] {
+    override def write(c: ControllerInstanceId): JsValue =
+      JsObject("asString" -> JsString(c.asString), "instanceType" -> JsString(c.instanceType))
+
+    override def read(json: JsValue): ControllerInstanceId = {
+      json.asJsObject.getFields("asString", "instanceType") match {
+        case Seq(JsString(asString), JsString(instanceType)) =>
+          if (instanceType == "controller") {
+            new ControllerInstanceId(asString)
+          } else {
+            deserializationError("could not read ControllerInstanceId")
+          }
+        case Seq(JsString(asString)) =>
+          new ControllerInstanceId(asString)
+        case _ =>
+          deserializationError("could not read ControllerInstanceId")
+      }
+    }
+  }
+}
+
+object SchedulerInstanceId extends DefaultJsonProtocol {
+  implicit val serdes = jsonFormat(SchedulerInstanceId.apply _, "asString")
 }
 
 trait InstanceId {
@@ -67,6 +158,8 @@ trait InstanceId {
   // reserve some number of characters as the prefix to be added to topic names
   private val MAX_NAME_LENGTH = 249 - 121
 
+  def serialize: String = InstanceId.serdes.write(this).compactPrint
+
   def validate(asString: String): Unit =
     require(
       asString.length <= MAX_NAME_LENGTH && asString.matches(LEGAL_CHARS),
@@ -76,4 +169,28 @@ trait InstanceId {
 
   val source: String
 
+  val toJson: JsValue
+}
+
+object InstanceId extends DefaultJsonProtocol {
+  def parse(i: String): Try[InstanceId] = Try(serdes.read(i.parseJson))
+
+  implicit val serdes = new RootJsonFormat[InstanceId] {
+    override def write(i: InstanceId): JsValue = i.toJson
+
+    override def read(json: JsValue): InstanceId = {
+      val JsObject(field) = json
+      field
+        .get("instanceType")
+        .map(_.convertTo[String] match {
+          case "invoker" =>
+            json.convertTo[InvokerInstanceId]
+          case "controller" =>
+            json.convertTo[ControllerInstanceId]
+          case _ =>
+            deserializationError("could not read InstanceId")
+        })
+        .getOrElse(deserializationError("could not read InstanceId"))
+    }
+  }
 }

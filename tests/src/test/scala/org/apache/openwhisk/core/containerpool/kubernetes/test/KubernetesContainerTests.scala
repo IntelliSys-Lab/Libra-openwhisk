@@ -21,7 +21,6 @@ import java.io.IOException
 import java.time.{Instant, ZoneId}
 
 import akka.NotUsed
-import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.util.ByteString
 import common.TimingHelpers
@@ -50,6 +49,7 @@ import org.apache.openwhisk.core.entity.ActivationResponse.Timeout
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.http.Messages
 import org.apache.openwhisk.core.containerpool.docker.test.DockerContainerTests._
+import org.scalatest.concurrent.ScalaFutures
 
 import scala.collection.immutable.Queue
 import scala.collection.mutable
@@ -65,7 +65,8 @@ class KubernetesContainerTests
     with StreamLogging
     with BeforeAndAfterEach
     with WskActorSystem
-    with TimingHelpers {
+    with TimingHelpers
+    with ScalaFutures {
 
   import KubernetesClientTests.TestKubernetesClient
   import KubernetesContainerTests._
@@ -73,8 +74,6 @@ class KubernetesContainerTests
   override def beforeEach() = {
     stream.reset()
   }
-
-  implicit val materializer: ActorMaterializer = ActorMaterializer()
 
   def instantDT(instant: Instant): Instant = Instant.from(instant.atZone(ZoneId.of("GMT+0")))
 
@@ -109,6 +108,8 @@ class KubernetesContainerTests
         body: JsObject,
         timeout: FiniteDuration,
         concurrent: Int,
+        maxResponse: ByteSize,
+        truncation: ByteSize,
         retry: Boolean = false,
         reschedule: Boolean = false)(implicit transid: TransactionId): Future[RunResult] = {
         ccRes
@@ -265,7 +266,7 @@ class KubernetesContainerTests
       Future.successful(RunResult(interval, Right(ContainerResponse(true, result.compactPrint, None))))
     }
 
-    val runResult = container.run(JsObject.empty, JsObject.empty, 1.second, 1)
+    val runResult = container.run(JsObject.empty, JsObject.empty, 1.second, 1, 1.MB, 1.MB)
     await(runResult) shouldBe (interval, ActivationResponse.success(Some(result), Some(2)))
 
     // assert the starting log is there
@@ -278,6 +279,22 @@ class KubernetesContainerTests
     end.deltaToMarkerStart shouldBe Some(interval.duration.toMillis)
   }
 
+  it should "throw ContainerHealthError if runtime container returns 503 response" in {
+    implicit val kubernetes = stub[KubernetesApi]
+    val runTimeout = 1.second
+    val interval = intervalOf(1.millisecond)
+    val result = JsObject.empty
+    val container = kubernetesContainer() {
+      Future.successful(RunResult(interval, Right(ContainerResponse(503, result.compactPrint, None))))
+    }
+
+    val initResult = container.initialize(JsObject.empty, 1.second, 1)
+    an[ContainerHealthError] should be thrownBy await(initResult)
+
+    val runResult = container.run(JsObject.empty, JsObject.empty, runTimeout, 1, 1.MB, 1.MB)
+    an[ContainerHealthError] should be thrownBy await(runResult)
+  }
+
   it should "properly deal with a timeout during run" in {
     implicit val kubernetes = stub[KubernetesApi]
 
@@ -288,7 +305,7 @@ class KubernetesContainerTests
       Future.successful(RunResult(interval, Left(Timeout(new Throwable()))))
     }
 
-    val runResult = container.run(JsObject.empty, JsObject.empty, runTimeout, 1)
+    val runResult = container.run(JsObject.empty, JsObject.empty, runTimeout, 1, 1.MB, 1.MB)
     await(runResult) shouldBe (interval, ActivationResponse.developerError(
       Messages.timedoutActivation(runTimeout, false)))
 
@@ -483,6 +500,45 @@ class KubernetesContainerTests
     processedLogsFalse(0) shouldBe expectedLogEntry.rawString
   }
 
+  it should "delete a pod that failed to start due to KubernetesPodApiException" in {
+    implicit val kubernetes = new TestKubernetesClient {
+      override def run(
+        name: String,
+        image: String,
+        memory: ByteSize = 256.MB,
+        env: Map[String, String] = Map.empty,
+        labels: Map[String, String] = Map.empty)(implicit transid: TransactionId): Future[KubernetesContainer] = {
+        Future.failed(KubernetesPodApiException(new Exception("faking fabric8 failure...")))
+      }
+    }
+
+    val container =
+      KubernetesContainer.create(transid = transid, name = "name", image = "image", userProvidedImage = true)
+    container.failed.futureValue shouldBe WhiskContainerStartupError(Messages.resourceProvisionError)
+
+    kubernetes.runs should have size 0
+    kubernetes.rms should have size 1
+  }
+
+  it should "delete a pod that failed to start due to some other Exception" in {
+    implicit val kubernetes = new TestKubernetesClient {
+      override def run(
+        name: String,
+        image: String,
+        memory: ByteSize = 256.MB,
+        env: Map[String, String] = Map.empty,
+        labels: Map[String, String] = Map.empty)(implicit transid: TransactionId): Future[KubernetesContainer] = {
+        Future.failed(new Exception("faking fabric8 failure..."))
+      }
+    }
+
+    val container =
+      KubernetesContainer.create(transid = transid, name = "name", image = "image", userProvidedImage = true)
+    container.failed.futureValue shouldBe a[WhiskContainerStartupError]
+
+    kubernetes.runs should have size 0
+    kubernetes.rms should have size 1
+  }
   def currentTsp: Instant = Instant.now
 
 }
