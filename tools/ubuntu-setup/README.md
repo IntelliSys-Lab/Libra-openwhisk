@@ -81,3 +81,31 @@ bin/wsk action invoke /whisk.system/utils/echo -p message hello --result
 }
 ```
 
+## Deploy with Python3
+Follow the steps below to deploy Libra using Python3:
+
+1. Create a python3.6 virtual environment
+```
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+
+chmod +x Miniconda3-latest-Linux-x86_64.sh
+./Miniconda3-latest-Linux-x86_64.sh
+
+conda create --name py36 python=3.6
+
+conda activate py36
+```
+2. Install requirements: 
+```
+./all_py3.sh
+```
+3. Update ansible python path:
+```
+cd ../../ansible
+
+echo -e "\nansible_python_interpreter: `which python`\n" >> ./environments/distributed/group_vars/all
+
+cd ../demo
+```
+4. You can follow the instructions [here](https://github.com/IntelliSys-Lab/Libra-HPDC23/blob/95c7d2b8dfa9b61fac86cdd2d5351434aa6872ed/demo/setup.sh#L8) to deploy Libra.
+
